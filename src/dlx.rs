@@ -155,6 +155,23 @@ impl Dlx {
     where
         F: FnMut(&[usize]) -> bool,
     {
+        self.search_with_check(solution, &mut |_| true, callback)
+    }
+
+    /// Run Algorithm X with early partial-solution checking.
+    ///
+    /// `row_check` is called after each row is added to the partial solution.
+    /// If it returns `false`, the branch is pruned immediately.
+    pub fn search_with_check<F, G>(
+        &mut self,
+        solution: &mut Vec<usize>,
+        row_check: &mut G,
+        callback: &mut F,
+    ) -> bool
+    where
+        F: FnMut(&[usize]) -> bool,
+        G: FnMut(&[usize]) -> bool,
+    {
         // All columns covered → report solution.
         if self.right[0] == 0 {
             return callback(solution);
@@ -182,7 +199,9 @@ impl Dlx {
                 j = self.right[j];
             }
 
-            cont = self.search(solution, callback);
+            if row_check(solution) {
+                cont = self.search_with_check(solution, row_check, callback);
+            }
 
             // Deselect row r (undo in reverse order).
             solution.pop();

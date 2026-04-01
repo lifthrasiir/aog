@@ -36,6 +36,8 @@ pub struct Solver {
     pub(crate) curr_target_area: Vec<Option<usize>>,
     // Dedup for match coupled solver: tracks seen piece1 cell sets
     pub(crate) seen_partitions: HashSet<Vec<CellId>>,
+    // Whether shape bank was auto-populated (affects solve strategy)
+    pub(crate) auto_populated_bank: bool,
 }
 
 impl Solver {
@@ -62,6 +64,7 @@ impl Solver {
             curr_comp_sz: Vec::new(),
             curr_target_area: Vec::new(),
             seen_partitions: HashSet::new(),
+            auto_populated_bank: false,
         }
     }
 

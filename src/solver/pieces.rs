@@ -315,37 +315,157 @@ impl Solver {
                 dlx.add_row(i, &cols);
             }
 
-            let mut solution = Vec::new();
-            dlx.search(&mut solution, &mut |sol_rows| {
-                let pieces: Vec<Piece> = sol_rows
+            // Check if incremental edge-clue checking is beneficial
+            let has_edge_constraints = self
+                .puzzle
+                .edge_clues
+                .iter()
+                .any(|cl| {
+                    matches!(
+                        cl.kind,
+                        EdgeClueKind::Inequality { .. }
+                            | EdgeClueKind::Delta
+                            | EdgeClueKind::Gemini
+                            | EdgeClueKind::Diff { .. }
+                    )
+                });
+
+            if has_edge_constraints {
+                eprintln!(
+                    "piece-based search with incremental edge-clue check ({} placements)",
+                    placements.len()
+                );
+
+                // Pre-compute edge constraint pairs: (cell1, cell2, kind)
+                let edge_constraints: Vec<(CellId, CellId, EdgeClueKind)> = self
+                    .puzzle
+                    .edge_clues
                     .iter()
-                    .map(|&idx| placements[idx].clone())
+                    .filter_map(|cl| {
+                        let (c1, c2) = self.grid.edge_cells(cl.edge);
+                        if self.grid.cell_exists[c1] && self.grid.cell_exists[c2] {
+                            Some((c1, c2, cl.kind))
+                        } else {
+                            None
+                        }
+                    })
                     .collect();
-                let old_edges = self.edges.clone();
-                for piece in &pieces {
-                    for &cid in &piece.cells {
-                        for eid in grid.cell_edges(cid).into_iter().flatten() {
-                            let (c1, c2) = grid.edge_cells(eid);
-                            let other = if c1 == cid { c2 } else { c1 };
-                            if !grid.cell_exists[other]
-                                || piece.cells.binary_search(&other).is_err()
-                            {
-                                self.edges[eid] = EdgeState::Cut;
-                            } else {
-                                self.edges[eid] = EdgeState::Uncut;
+
+                let num_cells_total = self.grid.num_cells();
+                let mut cell_to_piece = vec![usize::MAX; num_cells_total];
+
+                let mut row_check = |solution: &[usize]| -> bool {
+                    // Rebuild cell→piece mapping from solution
+                    cell_to_piece.fill(usize::MAX);
+                    for (pi, &row_id) in solution.iter().enumerate() {
+                        for &c in &placements[row_id].cells {
+                            cell_to_piece[c] = pi;
+                        }
+                    }
+                    // Check each edge constraint where both cells are assigned
+                    for &(c1, c2, kind) in &edge_constraints {
+                        let p1 = cell_to_piece[c1];
+                        let p2 = cell_to_piece[c2];
+                        if p1 == usize::MAX || p2 == usize::MAX {
+                            continue;
+                        }
+                        let a1 = placements[solution[p1]].area;
+                        let a2 = placements[solution[p2]].area;
+                        let s1 = &placements[solution[p1]].canonical;
+                        let s2 = &placements[solution[p2]].canonical;
+                        match kind {
+                            EdgeClueKind::Inequality { smaller_first } => {
+                                if smaller_first && a1 >= a2 {
+                                    return false;
+                                }
+                                if !smaller_first && a2 >= a1 {
+                                    return false;
+                                }
+                            }
+                            EdgeClueKind::Delta => {
+                                if s1 == s2 {
+                                    return false;
+                                }
+                            }
+                            EdgeClueKind::Gemini => {
+                                if s1 != s2 {
+                                    return false;
+                                }
+                            }
+                            EdgeClueKind::Diff { value } => {
+                                if a1.abs_diff(a2) != value {
+                                    return false;
+                                }
                             }
                         }
                     }
-                }
-                if self.validate(&pieces) {
-                    self.solution_count += 1;
-                    self.best_pieces = pieces;
-                    self.best_edges = self.edges.clone();
-                    self.report_solution(self.solution_count);
-                }
-                self.edges = old_edges;
-                self.solution_count < 2
-            });
+                    true
+                };
+
+                let mut solution = Vec::new();
+                dlx.search_with_check(&mut solution, &mut row_check, &mut |sol_rows| {
+                    let pieces: Vec<Piece> = sol_rows
+                        .iter()
+                        .map(|&idx| placements[idx].clone())
+                        .collect();
+                    let old_edges = self.edges.clone();
+                    for piece in &pieces {
+                        for &cid in &piece.cells {
+                            for eid in grid.cell_edges(cid).into_iter().flatten() {
+                                let (c1, c2) = grid.edge_cells(eid);
+                                let other = if c1 == cid { c2 } else { c1 };
+                                if !grid.cell_exists[other]
+                                    || piece.cells.binary_search(&other).is_err()
+                                {
+                                    self.edges[eid] = EdgeState::Cut;
+                                } else {
+                                    self.edges[eid] = EdgeState::Uncut;
+                                }
+                            }
+                        }
+                    }
+                    if self.validate(&pieces) {
+                        self.solution_count += 1;
+                        self.best_pieces = pieces;
+                        self.best_edges = self.edges.clone();
+                        self.report_solution(self.solution_count);
+                    }
+                    self.edges = old_edges;
+                    self.solution_count < 2
+                });
+            } else {
+                let mut solution = Vec::new();
+                dlx.search(&mut solution, &mut |sol_rows| {
+                    let pieces: Vec<Piece> = sol_rows
+                        .iter()
+                        .map(|&idx| placements[idx].clone())
+                        .collect();
+                    let old_edges = self.edges.clone();
+                    for piece in &pieces {
+                        for &cid in &piece.cells {
+                            for eid in grid.cell_edges(cid).into_iter().flatten() {
+                                let (c1, c2) = grid.edge_cells(eid);
+                                let other = if c1 == cid { c2 } else { c1 };
+                                if !grid.cell_exists[other]
+                                    || piece.cells.binary_search(&other).is_err()
+                                {
+                                    self.edges[eid] = EdgeState::Cut;
+                                } else {
+                                    self.edges[eid] = EdgeState::Uncut;
+                                }
+                            }
+                        }
+                    }
+                    if self.validate(&pieces) {
+                        self.solution_count += 1;
+                        self.best_pieces = pieces;
+                        self.best_edges = self.edges.clone();
+                        self.report_solution(self.solution_count);
+                    }
+                    self.edges = old_edges;
+                    self.solution_count < 2
+                });
+            }
         }
     }
 }
