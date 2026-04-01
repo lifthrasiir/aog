@@ -1,0 +1,257 @@
+mod edge_state;
+mod edges;
+mod match_coupled;
+mod match_solver;
+mod pieces;
+mod propagation;
+pub(crate) mod shapes;
+mod validation;
+
+use crate::grid::Grid;
+use crate::types::*;
+use std::collections::HashSet;
+
+pub struct Solver {
+    pub(crate) puzzle: Puzzle,
+    pub(crate) grid: Grid,
+    pub(crate) edges: Vec<EdgeState>,
+    pub(crate) solution_count: usize,
+    pub(crate) best_pieces: Vec<Piece>,
+    pub(crate) best_edges: Vec<EdgeState>,
+    pub(crate) changed: Vec<(EdgeId, EdgeState)>,
+    pub(crate) is_pre_cut: Vec<bool>,
+    pub(crate) eff_min_area: usize,
+    pub(crate) eff_max_area: usize,
+    // Piece-based search state
+    pub(crate) total_cells: usize,
+    pub(crate) shape_transforms: Vec<Vec<Vec<(isize, isize)>>>,
+    pub(crate) shape_bank_canonicals: Vec<Shape>,
+    // Progress tracking
+    pub(crate) node_count: u64,
+    pub(crate) next_report: u64,
+    pub(crate) total_unknown: usize,
+    // Cached component info from last propagate()
+    pub(crate) curr_comp_id: Vec<usize>,
+    pub(crate) curr_comp_sz: Vec<usize>,
+    pub(crate) curr_target_area: Vec<Option<usize>>,
+    // Dedup for match coupled solver: tracks seen piece1 cell sets
+    pub(crate) seen_partitions: HashSet<Vec<CellId>>,
+}
+
+impl Solver {
+    pub fn new(puzzle: Puzzle, grid: Grid) -> Self {
+        let n = grid.num_edges();
+        Self {
+            puzzle,
+            grid,
+            edges: vec![EdgeState::Unknown; n],
+            solution_count: 0,
+            best_pieces: Vec::new(),
+            best_edges: Vec::new(),
+            changed: Vec::new(),
+            is_pre_cut: vec![false; n],
+            eff_min_area: 1,
+            eff_max_area: usize::MAX,
+            total_cells: 0,
+            shape_transforms: Vec::new(),
+            shape_bank_canonicals: Vec::new(),
+            node_count: 0,
+            next_report: 10_000,
+            total_unknown: 0,
+            curr_comp_id: Vec::new(),
+            curr_comp_sz: Vec::new(),
+            curr_target_area: Vec::new(),
+            seen_partitions: HashSet::new(),
+        }
+    }
+
+    pub fn mark_pre_cut(&mut self, e: EdgeId) {
+        self.is_pre_cut[e] = true;
+        if self.edges[e] == EdgeState::Unknown {
+            self.edges[e] = EdgeState::Cut;
+            self.changed.push((e, EdgeState::Unknown));
+        }
+    }
+
+    pub fn solve(&mut self) -> usize {
+        self.compute_area_bounds();
+        self.total_cells = self.grid.total_existing_cells();
+
+        // Set pre-cut edges for missing cells
+        for e in 0..self.grid.num_edges() {
+            let (c1, c2) = self.grid.edge_cells(e);
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                if self.edges[e] == EdgeState::Unknown {
+                    self.edges[e] = EdgeState::Cut;
+                    self.changed.push((e, EdgeState::Unknown));
+                }
+            }
+        }
+        // Set edge clues to CUT
+        for clue in &self.puzzle.edge_clues {
+            if self.edges[clue.edge] == EdgeState::Unknown {
+                self.edges[clue.edge] = EdgeState::Cut;
+                self.changed.push((clue.edge, EdgeState::Unknown));
+            }
+        }
+        self.propagate_palisade();
+
+        if self.propagate().is_err() {
+            return 0;
+        }
+
+        // Debug: count edges after propagation
+        let n_cut = self.edges.iter().filter(|&&e| e == EdgeState::Cut).count();
+        let n_uncut = self.edges.iter().filter(|&&e| e == EdgeState::Uncut).count();
+        let n_unknown = self.edges.iter().filter(|&&e| e == EdgeState::Unknown).count();
+        eprintln!(
+            "after propagation: cut={}, uncut={}, unknown={}, total={}",
+            n_cut, n_uncut, n_unknown, n_cut + n_uncut + n_unknown
+        );
+
+        // Dump grid structure
+        eprintln!("grid: rows={}, cols={}", self.grid.rows, self.grid.cols);
+        for r in 0..self.grid.rows {
+            let mut row_str = String::new();
+            for c in 0..self.grid.cols {
+                let cid = self.grid.cell_id(r, c);
+                if self.grid.cell_exists[cid] {
+                    // Check for rose clue
+                    let rose = self.puzzle.cell_clues.iter().find(|cl| matches!(cl, CellClue::Rose { cell, .. } if *cell == cid));
+                    if let Some(_) = rose {
+                        row_str.push('A');
+                    } else {
+                        row_str.push('_');
+                    }
+                } else {
+                    row_str.push(' ');
+                }
+            }
+            eprintln!("  row {}: {}", r, row_str);
+        }
+
+        // Count remaining unknown edges for progress display
+        self.total_unknown = self
+            .edges
+            .iter()
+            .filter(|&&e| e == EdgeState::Unknown)
+            .count();
+
+        // For precision puzzles without explicit shape bank, auto-populate
+        // with all free polyominoes of the required size (much faster piece-based search)
+        self.auto_populate_shape_bank();
+
+        if self.puzzle.rules.match_all {
+            self.solve_match();
+        } else {
+            self.solve_normal();
+        }
+
+        // Clear the progress line
+        eprint!("\r{:>80}\r", "");
+
+        self.solution_count
+    }
+
+    fn report_progress(&mut self) {
+        if self.node_count >= self.next_report {
+            let unknown = self
+                .edges
+                .iter()
+                .filter(|&&e| e == EdgeState::Unknown)
+                .count();
+            eprint!(
+                "\rnodes: {:>10} | remaining unknown: {:>4}/{:<4}",
+                self.node_count, unknown, self.total_unknown
+            );
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+            self.next_report = self.node_count + self.next_report / 2;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_best_pieces(&self) -> &[Piece] {
+        &self.best_pieces
+    }
+    #[cfg(test)]
+    pub(crate) fn get_best_edges(&self) -> &[EdgeState] {
+        &self.best_edges
+    }
+    #[cfg(test)]
+    pub(crate) fn get_grid(&self) -> &Grid {
+        &self.grid
+    }
+
+    /// Print the current best solution with a header. Called from all search paths.
+    pub(crate) fn report_solution(&self, which: usize) {
+        // Clear the progress line on stderr
+        eprint!("\r{:>80}\r", "");
+        let header = match which {
+            1 => "First solution found:",
+            2 => "Second solution found:",
+            _ => "Solution found:",
+        };
+        println!("{}", header);
+        print!(
+            "{}",
+            crate::formatter::format_solution(&self.grid, &self.best_edges, &self.best_pieces)
+        );
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use super::*;
+    use crate::parser::Parser;
+
+    pub fn make_solver(input: &str) -> Solver {
+        let mut p = Parser::new();
+        p.parse(input.as_bytes()).unwrap();
+        let mut s = Solver::new(p.puzzle, p.grid);
+        for e in p.pre_cut_edges {
+            s.mark_pre_cut(e);
+        }
+        s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_helpers::make_solver;
+
+    #[test]
+    fn test_o_unique_solution() {
+        let mut s = make_solver(
+            "\
+shape bank O
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+",
+        );
+        let count = s.solve();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_t_unique_solution() {
+        let mut s = make_solver(
+            "\
+shape bank O
++---+---+---+---+
+| _ . _ . _ . _ |
++ . + . + . + . +
+| _ . _ . _ . _ |
++---+---+---+---+
+| _ . _ . _ . _ |
++ . + . + . + . +
+| _ . _ . _ . _ |
++---+---+---+---+
+",
+        );
+        let count = s.solve();
+        assert_eq!(count, 1);
+    }
+}

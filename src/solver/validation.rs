@@ -1,0 +1,403 @@
+use super::Solver;
+use crate::polyomino::{self, canonical, is_rectangular, Rotation};
+use crate::types::*;
+use std::collections::{HashSet, VecDeque};
+
+impl Solver {
+    pub(crate) fn compute_pieces(&self) -> Vec<Piece> {
+        let n = self.grid.num_cells();
+        let mut comp = vec![usize::MAX; n];
+        let mut num_pieces = 0usize;
+
+        for c in 0..n {
+            if !self.grid.cell_exists[c] || comp[c] != usize::MAX {
+                continue;
+            }
+            comp[c] = num_pieces;
+            let mut q = VecDeque::new();
+            q.push_back(c);
+            while let Some(cur) = q.pop_front() {
+                for eid in self.grid.cell_edges(cur).into_iter().flatten() {
+                    let (c1, c2) = self.grid.edge_cells(eid);
+                    let other = if c1 == cur { c2 } else { c1 };
+                    if !self.grid.cell_exists[other] || comp[other] != usize::MAX {
+                        continue;
+                    }
+                    if self.edges[eid] != EdgeState::Cut {
+                        comp[other] = num_pieces;
+                        q.push_back(other);
+                    }
+                }
+            }
+            num_pieces += 1;
+        }
+
+        let mut pieces = vec![Piece::default(); num_pieces];
+        for c in 0..n {
+            if !self.grid.cell_exists[c] || comp[c] == usize::MAX {
+                continue;
+            }
+            pieces[comp[c]].cells.push(c);
+        }
+        for p in &mut pieces {
+            p.area = p.cells.len();
+            let sc: Vec<(i32, i32)> = p
+                .cells
+                .iter()
+                .map(|&c| {
+                    let (r, col) = self.grid.cell_pos(c);
+                    (r as i32, col as i32)
+                })
+                .collect();
+            p.canonical = canonical(&polyomino::make_shape(&sc));
+        }
+        pieces
+    }
+
+    pub(crate) fn validate(&self, pieces: &[Piece]) -> bool {
+        if pieces.is_empty() {
+            return false;
+        }
+        let n = self.grid.num_cells();
+        let mut cell_piece = vec![usize::MAX; n];
+        for (p, piece) in pieces.iter().enumerate() {
+            for &c in &piece.cells {
+                cell_piece[c] = p;
+            }
+        }
+        if pieces.iter().any(|p| p.cells.is_empty()) {
+            return false;
+        }
+        if self
+            .is_pre_cut
+            .iter()
+            .enumerate()
+            .any(|(e, &pre)| pre && self.edges[e] != EdgeState::Cut)
+        {
+            return false;
+        }
+        if self.edges.iter().any(|&e| e == EdgeState::Unknown) {
+            return false;
+        }
+
+        let rules = &self.puzzle.rules;
+        for p in pieces {
+            if let Some(min) = rules.minimum {
+                if p.area < min {
+                    return false;
+                }
+            }
+            if let Some(max) = rules.maximum {
+                if p.area > max {
+                    return false;
+                }
+            }
+            let rect = is_rectangular(p, &self.grid);
+            if rules.boxy && !rect {
+                return false;
+            }
+            if rules.non_boxy && rect {
+                return false;
+            }
+        }
+        if rules.match_all && pieces.len() > 1 {
+            if !pieces
+                .iter()
+                .skip(1)
+                .all(|p| p.canonical == pieces[0].canonical)
+            {
+                return false;
+            }
+        }
+        if rules.mismatch {
+            for i in 0..pieces.len() {
+                for j in (i + 1)..pieces.len() {
+                    if pieces[i].canonical == pieces[j].canonical {
+                        return false;
+                    }
+                }
+            }
+        }
+        if rules.size_separation {
+            for e in 0..self.grid.num_edges() {
+                if self.edges[e] != EdgeState::Cut {
+                    continue;
+                }
+                let (c1, c2) = self.grid.edge_cells(e);
+                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                    continue;
+                }
+                let p1 = cell_piece[c1];
+                let p2 = cell_piece[c2];
+                if p1 != p2 && pieces[p1].area == pieces[p2].area {
+                    return false;
+                }
+            }
+        }
+        if !rules.shape_bank.is_empty() {
+            for p in pieces {
+                let found = rules
+                    .shape_bank
+                    .iter()
+                    .any(|bs| canonical(&p.canonical) == canonical(bs));
+                if !found {
+                    return false;
+                }
+            }
+        }
+        if rules.mingle_shape {
+            for e in 0..self.grid.num_edges() {
+                if self.edges[e] != EdgeState::Cut {
+                    continue;
+                }
+                let (c1, c2) = self.grid.edge_cells(e);
+                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                    continue;
+                }
+                let p1 = cell_piece[c1];
+                let p2 = cell_piece[c2];
+                if p1 != p2 && pieces[p1].canonical != pieces[p2].canonical {
+                    return false;
+                }
+            }
+        }
+        if rules.solitude {
+            for p in pieces {
+                let cnt = self
+                    .puzzle
+                    .cell_clues
+                    .iter()
+                    .filter(|cl| self.grid.cell_exists[cl.cell()] && p.cells.contains(&cl.cell()))
+                    .count();
+                if cnt != 1 {
+                    return false;
+                }
+            }
+        }
+
+        // Cell clues
+        for clue in &self.puzzle.cell_clues {
+            if !self.grid.cell_exists[clue.cell()] {
+                return false;
+            }
+            let pid = cell_piece[clue.cell()];
+            if pid == usize::MAX {
+                return false;
+            }
+            let piece = &pieces[pid];
+            match clue {
+                CellClue::Area { value, .. } => {
+                    if piece.area != *value {
+                        return false;
+                    }
+                }
+                CellClue::Rose { .. } => {}
+                CellClue::Polyomino { shape, .. } => {
+                    if canonical(&piece.canonical) != canonical(shape) {
+                        return false;
+                    }
+                }
+                CellClue::Palisade { cell, kind } => {
+                    let mut num_cut = 0usize;
+                    let mut cut_mask = 0u8;
+                    for (k, eid) in self
+                        .grid
+                        .cell_edges(*cell)
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                    {
+                        let (c1, c2) = self.grid.edge_cells(eid);
+                        let is_boundary = !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2];
+                        if is_boundary || self.edges[eid] == EdgeState::Cut {
+                            num_cut += 1;
+                            cut_mask |= 1 << k;
+                        }
+                    }
+                    let valid = Rotation::all().iter().any(|rot| {
+                        let (ec, em) = kind.pattern_at_rotation(rot.index());
+                        num_cut == ec && (cut_mask & em) == em
+                    });
+                    if !valid {
+                        return false;
+                    }
+                }
+                CellClue::Compass { cell, compass } => {
+                    let (cr, cc) = self.grid.cell_pos(*cell);
+                    let count_dir = |(lr, lc): (isize, isize)| -> usize {
+                        piece
+                            .cells
+                            .iter()
+                            .filter(|&&c| {
+                                let (pr, pc) = self.grid.cell_pos(c);
+                                (pr as isize) - (cr as isize) == lr
+                                    && (pc as isize) - (cc as isize) == lc
+                            })
+                            .count()
+                    };
+                    let (ec, wc, sc, nc) = (
+                        count_dir((0, 1)),
+                        count_dir((0, -1)),
+                        count_dir((1, 0)),
+                        count_dir((-1, 0)),
+                    );
+                    if let Some(e) = compass.e {
+                        if e != ec {
+                            return false;
+                        }
+                    }
+                    if let Some(w) = compass.w {
+                        if w != wc {
+                            return false;
+                        }
+                    }
+                    if let Some(s) = compass.s {
+                        if s != sc {
+                            return false;
+                        }
+                    }
+                    if let Some(n) = compass.n {
+                        if n != nc {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Rose window: each piece must contain exactly one rose of each symbol
+        {
+            let mut has_rose = [false; 5];
+            for cl in &self.puzzle.cell_clues {
+                if let CellClue::Rose { symbol, .. } = cl {
+                    has_rose[*symbol as usize] = true;
+                }
+            }
+            for sym in 0..5u8 {
+                if !has_rose[sym as usize] {
+                    continue;
+                }
+                for p in pieces {
+                    let cnt = p.cells.iter()
+                        .filter(|&&c| {
+                            self.puzzle.cell_clues.iter().any(|cl| {
+                                matches!(cl, CellClue::Rose { symbol, cell, .. } if *symbol == sym && *cell == c)
+                            })
+                        })
+                        .count();
+                    if cnt != 1 {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Edge clues
+        for clue in &self.puzzle.edge_clues {
+            if self.edges[clue.edge] != EdgeState::Cut {
+                return false;
+            }
+            let (c1, c2) = self.grid.edge_cells(clue.edge);
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                return false;
+            }
+            let p1 = cell_piece[c1];
+            let p2 = cell_piece[c2];
+            if p1 == p2 {
+                return false;
+            }
+            let a1 = pieces[p1].area;
+            let a2 = pieces[p2].area;
+            match clue.kind {
+                EdgeClueKind::Delta => {
+                    if pieces[p1].canonical == pieces[p2].canonical {
+                        return false;
+                    }
+                }
+                EdgeClueKind::Gemini => {
+                    if pieces[p1].canonical != pieces[p2].canonical {
+                        return false;
+                    }
+                }
+                EdgeClueKind::Inequality { smaller_first } => {
+                    if smaller_first && a1 >= a2 {
+                        return false;
+                    }
+                    if !smaller_first && a2 >= a1 {
+                        return false;
+                    }
+                }
+                EdgeClueKind::Diff { value } => {
+                    if a1.abs_diff(a2) != value {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Vertex clues
+        for clue in &self.puzzle.vertex_clues {
+            let (vi, vj) = self.grid.vertex_pos(clue.vertex);
+            let distinct: HashSet<_> = self
+                .grid
+                .vertex_cells(vi, vj)
+                .into_iter()
+                .flatten()
+                .filter(|&cid| self.grid.cell_exists[cid] && cell_piece[cid] != usize::MAX)
+                .map(|cid| cell_piece[cid])
+                .collect();
+            if distinct.len() != clue.value {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::solver::test_helpers::make_solver;
+
+    #[test]
+    fn compute_pieces_all_uncut() {
+        let input = "\
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+";
+        let mut s = make_solver(input);
+        // Mark all edges as Uncut (except boundaries which are pre-cut)
+        for e in 0..s.grid.num_edges() {
+            if s.edges[e] == EdgeState::Unknown {
+                let _ = s.set_edge(e, EdgeState::Uncut);
+            }
+        }
+        let pieces = s.compute_pieces();
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].area, 4);
+    }
+
+    #[test]
+    fn compute_pieces_all_cut() {
+        let input = "\
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+";
+        let mut s = make_solver(input);
+        for e in 0..s.grid.num_edges() {
+            if s.edges[e] == EdgeState::Unknown {
+                let _ = s.set_edge(e, EdgeState::Cut);
+            }
+        }
+        let pieces = s.compute_pieces();
+        assert_eq!(pieces.len(), 4);
+        assert!(pieces.iter().all(|p| p.area == 1));
+    }
+}
