@@ -24,12 +24,24 @@ impl Solver {
         self.eff_max_area = hi;
     }
 
-    /// When no shape bank is given but eff_max_area is small enough, auto-populate
-    /// with all free polyominoes up to that size for much faster piece-based search.
+    /// When no shape bank is given, auto-populate based on constraints
+    /// for much faster piece-based search.
     pub(crate) fn auto_populate_shape_bank(&mut self) {
         if !self.puzzle.rules.shape_bank.is_empty() {
             return;
         }
+        if self.puzzle.rules.boxy {
+            self.populate_boxy();
+        } else if self.puzzle.rules.non_boxy {
+            self.populate_non_boxy();
+        } else {
+            self.populate_general();
+        }
+        self.auto_populated_bank = !self.puzzle.rules.shape_bank.is_empty();
+    }
+
+    /// General: only for tight (single-size) puzzles with max <= 5.
+    fn populate_general(&mut self) {
         if self.eff_max_area > 5 || self.eff_max_area < 1 {
             return;
         }
@@ -43,13 +55,73 @@ impl Solver {
             if let Some(shape) = polyomino::get_named_shape(name) {
                 if shape.cells.len() == target {
                     let canon = canonical(&shape);
-                    let is_new = seen.insert(canon.cells.clone());
-                    if is_new {
+                    if seen.insert(canon.cells.clone()) {
                         self.puzzle.rules.shape_bank.push(shape);
                     }
                 }
             }
         }
+    }
+
+    /// Boxy: only rectangles. Extremely few shapes even for large max.
+    fn populate_boxy(&mut self) {
+        let max_size = self.eff_max_area.min(self.total_cells);
+        if max_size < self.eff_min_area || self.eff_min_area < 1 {
+            return;
+        }
+        let mut seen: HashSet<Vec<(i32, i32)>> = HashSet::new();
+        for size in self.eff_min_area..=max_size {
+            for w in 1..=size {
+                if size % w != 0 {
+                    continue;
+                }
+                let h = size / w;
+                if w > h {
+                    continue; // avoid rotation duplicates (only w <= h)
+                }
+                let cells: Vec<(i32, i32)> = (0..h as i32)
+                    .flat_map(|r| (0..w as i32).map(move |c| (r, c)))
+                    .collect();
+                let shape = polyomino::make_shape(&cells);
+                let canon = canonical(&shape);
+                if seen.insert(canon.cells.clone()) {
+                    self.puzzle.rules.shape_bank.push(shape);
+                }
+            }
+        }
+        eprintln!(
+            "boxy shape bank: {} shapes (sizes {}-{})",
+            self.puzzle.rules.shape_bank.len(),
+            self.eff_min_area,
+            max_size
+        );
+    }
+
+    /// Non-boxy: free polyominoes with rectangular ones filtered out.
+    fn populate_non_boxy(&mut self) {
+        let max_size = self.eff_max_area.min(8);
+        if max_size < self.eff_min_area || self.eff_min_area < 1 {
+            return;
+        }
+        let mut seen: HashSet<Vec<(i32, i32)>> = HashSet::new();
+        for size in self.eff_min_area..=max_size {
+            let shapes = polyomino::enumerate_free_polyominoes(size);
+            for shape in shapes {
+                if polyomino::is_rectangular_shape(&shape) {
+                    continue;
+                }
+                let canon = canonical(&shape);
+                if seen.insert(canon.cells.clone()) {
+                    self.puzzle.rules.shape_bank.push(shape);
+                }
+            }
+        }
+        eprintln!(
+            "non-boxy shape bank: {} shapes (sizes {}-{})",
+            self.puzzle.rules.shape_bank.len(),
+            self.eff_min_area,
+            max_size
+        );
     }
 
     pub(crate) fn prepare_shape_transforms(&mut self) {
@@ -322,5 +394,103 @@ mod tests {
         for shape in &solver.puzzle.rules.shape_bank {
             assert_eq!(shape.cells.len(), 2);
         }
+    }
+
+    #[test]
+    fn auto_populate_non_boxy_filters_rectangles() {
+        let input = "\
++---+---+---+---+
+| _ . _ . _ . _ |
++ . + . + . + . +
+| _ . _ . _ . _ |
++---+---+---+---+
+";
+        let s = make_solver(input);
+        let puzzle = Puzzle {
+            rules: GlobalRules {
+                minimum: Some(3),
+                maximum: Some(4),
+                non_boxy: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let grid = s.get_grid().clone();
+        let mut solver = Solver::new(puzzle, grid);
+        solver.compute_area_bounds();
+        solver.auto_populate_shape_bank();
+        assert!(!solver.puzzle.rules.shape_bank.is_empty());
+        // No shape should be rectangular
+        for shape in &solver.puzzle.rules.shape_bank {
+            assert!(
+                !polyomino::is_rectangular_shape(shape),
+                "non-boxy bank should not contain rectangular shapes, got area={}",
+                shape.cells.len()
+            );
+        }
+        // Should have shapes of sizes 3 and 4
+        let sizes: std::collections::HashSet<usize> = solver
+            .puzzle
+            .rules
+            .shape_bank
+            .iter()
+            .map(|s| s.cells.len())
+            .collect();
+        assert!(sizes.contains(&3));
+        assert!(sizes.contains(&4));
+        assert!(!sizes.contains(&2)); // domino is rectangular
+    }
+
+    #[test]
+    fn auto_populate_boxy_only_rectangles() {
+        let input = "\
++---+---+---+---+---+
+| _ . _ . _ . _ . _ |
++ . + . + . + . + . +
+| _ . _ . _ . _ . _ |
++ . + . + . + . + . +
+| _ . _ . _ . _ . _ |
++---+---+---+---+---+
+";
+        let s = make_solver(input);
+        let puzzle = Puzzle {
+            rules: GlobalRules {
+                minimum: Some(1),
+                maximum: Some(10),
+                boxy: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let total = s.grid.total_existing_cells();
+        let grid = s.get_grid().clone();
+        let mut solver = Solver::new(puzzle, grid);
+        solver.total_cells = total;
+        solver.compute_area_bounds();
+        solver.auto_populate_shape_bank();
+        assert!(!solver.puzzle.rules.shape_bank.is_empty());
+        // All shapes should be rectangular
+        for shape in &solver.puzzle.rules.shape_bank {
+            assert!(
+                polyomino::is_rectangular_shape(shape),
+                "boxy bank should only contain rectangular shapes, got area={}",
+                shape.cells.len()
+            );
+        }
+        // Should have shapes of various sizes 1-10
+        let sizes: std::collections::HashSet<usize> = solver
+            .puzzle
+            .rules
+            .shape_bank
+            .iter()
+            .map(|s| s.cells.len())
+            .collect();
+        assert!(sizes.contains(&1));
+        assert!(sizes.contains(&2));
+        assert!(sizes.contains(&4));
+        assert!(sizes.contains(&6));
+        assert!(sizes.contains(&10));
+        // Boxy shapes are few: area n has ceil(d(n)/2) rectangles
+        assert!(solver.puzzle.rules.shape_bank.len() <= 17); // sum of ceil(d(n)/2) for n=1..10
     }
 }

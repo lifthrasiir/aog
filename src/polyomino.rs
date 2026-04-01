@@ -225,6 +225,14 @@ fn poly_rec(
     }
 }
 
+/// Check if a Shape fills its bounding box completely (is rectangular).
+pub fn is_rectangular_shape(shape: &Shape) -> bool {
+    if shape.cells.is_empty() {
+        return false;
+    }
+    (shape.height * shape.width) as usize == shape.cells.len()
+}
+
 pub fn is_rectangular(piece: &Piece, grid: &Grid) -> bool {
     if piece.cells.is_empty() {
         return false;
@@ -339,6 +347,20 @@ mod tests {
         assert_eq!(shape.cells.len(), 5);
         assert_eq!(shape.height, 3);
         assert_eq!(shape.width, 3);
+    }
+
+    #[test]
+    fn is_rectangular_shape_basic() {
+        let i = get_named_shape("I").unwrap(); // 1x4 rectangle
+        assert!(is_rectangular_shape(&i));
+        let o = get_named_shape("O").unwrap(); // 2x2 rectangle
+        assert!(is_rectangular_shape(&o));
+        let t = get_named_shape("T").unwrap(); // T-shape
+        assert!(!is_rectangular_shape(&t));
+        let l = get_named_shape("L").unwrap(); // L-shape
+        assert!(!is_rectangular_shape(&l));
+        let x = get_named_shape("X").unwrap(); // X-pentomino
+        assert!(!is_rectangular_shape(&x));
     }
 
     #[test]

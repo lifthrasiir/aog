@@ -205,6 +205,89 @@ impl Solver {
             }
         }
 
+        // Non-boxy / boxy: check fully-formed components
+        if self.puzzle.rules.non_boxy || self.puzzle.rules.boxy {
+            for ci in 0..num_comp {
+                if can_grow[ci] {
+                    continue;
+                }
+                let mut min_r = self.grid.rows;
+                let mut max_r = 0usize;
+                let mut min_c = self.grid.cols;
+                let mut max_c = 0usize;
+                let mut cell_count = 0usize;
+                for c in 0..n {
+                    if self.grid.cell_exists[c] && comp_id[c] == ci {
+                        let (r, col) = self.grid.cell_pos(c);
+                        min_r = min_r.min(r);
+                        max_r = max_r.max(r);
+                        min_c = min_c.min(col);
+                        max_c = max_c.max(col);
+                        cell_count += 1;
+                    }
+                }
+                if cell_count == 0 {
+                    continue;
+                }
+                let is_rect = cell_count == (max_r - min_r + 1) * (max_c - min_c + 1);
+                if self.puzzle.rules.non_boxy && is_rect {
+                    return Err(());
+                }
+                if self.puzzle.rules.boxy && !is_rect {
+                    return Err(());
+                }
+            }
+        }
+
+        // Inequality propagation for Cut edges between known components
+        for clue in &self.puzzle.edge_clues {
+            let EdgeClueKind::Inequality { smaller_first } = clue.kind else {
+                continue;
+            };
+            let e = clue.edge;
+            if self.edges[e] != EdgeState::Cut {
+                continue;
+            }
+            let (c1, c2) = self.grid.edge_cells(e);
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                continue;
+            }
+            let ci1 = comp_id[c1];
+            let ci2 = comp_id[c2];
+            if ci1 == ci2 {
+                continue;
+            }
+            let (smaller_ci, larger_ci) = if smaller_first {
+                (ci1, ci2)
+            } else {
+                (ci2, ci1)
+            };
+
+            let smaller_done = !can_grow[smaller_ci];
+            let larger_done = !can_grow[larger_ci];
+
+            // Both fully formed: directly compare
+            if smaller_done && larger_done {
+                if comp_sz[smaller_ci] >= comp_sz[larger_ci] {
+                    return Err(());
+                }
+                continue;
+            }
+
+            // Larger piece fully formed but too small
+            if larger_done && comp_sz[larger_ci] <= comp_sz[smaller_ci] {
+                return Err(());
+            }
+
+            // Smaller piece fully formed but too large
+            if smaller_done {
+                let max_larger = target_area[larger_ci].unwrap_or(self.eff_max_area);
+                if comp_sz[smaller_ci] >= max_larger {
+                    return Err(());
+                }
+            }
+        }
+
         Ok(progress)
     }
 
