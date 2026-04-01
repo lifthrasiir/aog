@@ -415,10 +415,10 @@ impl Parser {
 
     fn edge_char_to_kind(ch: char) -> Option<EdgeClueKind> {
         Some(match ch {
-            '^' => EdgeClueKind::Inequality {
+            '^' | '<' => EdgeClueKind::Inequality {
                 smaller_first: true,
             },
-            'v' => EdgeClueKind::Inequality {
+            'v' | '>' => EdgeClueKind::Inequality {
                 smaller_first: false,
             },
             'd' => EdgeClueKind::Delta,
