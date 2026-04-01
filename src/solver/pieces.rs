@@ -153,7 +153,7 @@ impl Solver {
         true
     }
 
-    fn generate_placements(&self) -> Vec<Piece> {
+    fn generate_placements(&self, cell_min: &[usize], cell_max: &[usize]) -> Vec<Piece> {
         let mut placements = Vec::new();
 
         let mut cell_clues: Vec<Vec<&CellClue>> = vec![vec![]; self.grid.num_cells()];
@@ -170,9 +170,10 @@ impl Solver {
 
         for (si, transforms) in self.shape_transforms.iter().enumerate() {
             for transform in transforms {
+                let area = transform.len();
                 for r in 0..self.grid.rows {
                     for c in 0..self.grid.cols {
-                        let mut cells = Vec::with_capacity(transform.len());
+                        let mut cells = Vec::with_capacity(area);
                         let mut valid = true;
                         for &(dr, dc) in transform {
                             let nr = r as isize + dr;
@@ -187,6 +188,11 @@ impl Solver {
                             }
                             let cid = self.grid.cell_id(nr as usize, nc as usize);
                             if !self.grid.cell_exists[cid] {
+                                valid = false;
+                                break;
+                            }
+                            // Area bounds check from inequality constraints
+                            if area < cell_min[cid] || area > cell_max[cid] {
                                 valid = false;
                                 break;
                             }
@@ -207,7 +213,7 @@ impl Solver {
                         ) {
                             placements.push(Piece {
                                 cells,
-                                area: transform.len(),
+                                area,
                                 canonical: self.shape_bank_canonicals[si].clone(),
                             });
                         }
@@ -308,7 +314,54 @@ impl Solver {
                 self.solution_count < 2
             });
         } else {
-            let placements = self.generate_placements();
+            // Compute cell area bounds from inequality constraints (arc consistency)
+            let n = self.grid.num_cells();
+            let mut cell_min = vec![self.eff_min_area; n];
+            let mut cell_max = vec![self.eff_max_area; n];
+
+            let mut ineq_pairs: Vec<(CellId, CellId)> = Vec::new();
+            for cl in &self.puzzle.edge_clues {
+                if let EdgeClueKind::Inequality { smaller_first } = cl.kind {
+                    let (c1, c2) = self.grid.edge_cells(cl.edge);
+                    if self.grid.cell_exists[c1] && self.grid.cell_exists[c2] {
+                        if smaller_first {
+                            ineq_pairs.push((c1, c2)); // area(c1) < area(c2)
+                        } else {
+                            ineq_pairs.push((c2, c1)); // area(c2) < area(c1)
+                        }
+                    }
+                }
+            }
+
+            if !ineq_pairs.is_empty() {
+                let mut changed = true;
+                while changed {
+                    changed = false;
+                    for &(small, large) in &ineq_pairs {
+                        let new_max_small = cell_max[large].saturating_sub(1);
+                        if cell_max[small] > new_max_small {
+                            cell_max[small] = new_max_small;
+                            changed = true;
+                        }
+                        let new_min_large = cell_min[small].saturating_add(1);
+                        if cell_min[large] < new_min_large {
+                            cell_min[large] = new_min_large;
+                            changed = true;
+                        }
+                    }
+                }
+                eprintln!(
+                    "inequality bounds: {} constraints, narrowed {} cells",
+                    ineq_pairs.len(),
+                    (0..n)
+                        .filter(|&c| self.grid.cell_exists[c]
+                            && (cell_min[c] != self.eff_min_area
+                                || cell_max[c] != self.eff_max_area))
+                        .count()
+                );
+            }
+
+            let placements = self.generate_placements(&cell_min, &cell_max);
             for (i, p) in placements.iter().enumerate() {
                 let mut cols: Vec<usize> = p.cells.iter().map(|&c| cell_to_col[c]).collect();
                 cols.sort();
