@@ -197,7 +197,9 @@ impl Solver {
             }
         }
 
-        // Compass bounds: prune components that can't satisfy compass clues
+        // Compass bounds: prune and propagate based on compass clues
+        let mut compass_forced_cuts: Vec<EdgeId> = Vec::new();
+
         for clue in &self.puzzle.cell_clues {
             let CellClue::Compass { cell, compass } = clue else { continue };
             if !self.grid.cell_exists[*cell] {
@@ -238,12 +240,173 @@ impl Solver {
                 (compass.w, 3),
             ] {
                 let Some(v) = val else { continue };
+
                 if counts[idx] > v {
                     return Err(());
                 }
+
+                if counts[idx] == v {
+                    // At limit: cut growth edges in this direction
+                    for &e in &growth_edges[ci] {
+                        let (c1, c2) = self.grid.edge_cells(e);
+                        let other = if comp_id[c1] == ci { c2 } else { c1 };
+                        let (pr, pc) = self.grid.cell_pos(other);
+                        let matches = match idx {
+                            0 => (pr as isize) < cr_i,
+                            1 => (pr as isize) > cr_i,
+                            2 => (pc as isize) > cc_i,
+                            3 => (pc as isize) < cc_i,
+                            _ => false,
+                        };
+                        if matches {
+                            compass_forced_cuts.push(e);
+                        }
+                    }
+                }
+
                 if !can_grow[ci] && counts[idx] < v {
                     return Err(());
                 }
+            }
+        }
+
+        // Pair-wise compass consistency within same component
+        {
+            // Build compass-per-component list directly (avoids extending the
+            // comp_clues borrow past earlier set_edge calls)
+            let mut compass_per_comp: Vec<Vec<(CellId, CompassData)>> =
+                vec![Vec::new(); num_comp];
+            for cl in &self.puzzle.cell_clues {
+                if let CellClue::Compass { cell, compass } = cl {
+                    if self.grid.cell_exists[*cell] {
+                        let ci = comp_id[*cell];
+                        if ci != usize::MAX {
+                            compass_per_comp[ci].push((*cell, compass.clone()));
+                        }
+                    }
+                }
+            }
+
+            for ccomp in &compass_per_comp {
+                for i in 0..ccomp.len() {
+                    for j in (i + 1)..ccomp.len() {
+                        let (ca, pa) = &ccomp[i];
+                        let (cb, pb) = &ccomp[j];
+                        let (ra, cola) = self.grid.cell_pos(*ca);
+                        let (rb, colb) = self.grid.cell_pos(*cb);
+
+                        // Zero-value: if A has D=0, no cell may be in direction D of A
+                        if pa.n == Some(0) && rb < ra {
+                            return Err(());
+                        }
+                        if pb.n == Some(0) && ra < rb {
+                            return Err(());
+                        }
+                        if pa.s == Some(0) && rb > ra {
+                            return Err(());
+                        }
+                        if pb.s == Some(0) && ra > rb {
+                            return Err(());
+                        }
+                        if pa.e == Some(0) && colb > cola {
+                            return Err(());
+                        }
+                        if pb.e == Some(0) && cola > colb {
+                            return Err(());
+                        }
+                        if pa.w == Some(0) && colb < cola {
+                            return Err(());
+                        }
+                        if pb.w == Some(0) && cola < colb {
+                            return Err(());
+                        }
+
+                        // Strict subset: B north of A ⇒ count_B(N) < count_A(N)
+                        // (B itself is counted in A's N but not in B's own N)
+                        // So v_B(N) must be strictly less than v_A(N).
+                        if rb < ra {
+                            if let (Some(vb), Some(va)) = (pb.n, pa.n) {
+                                if vb >= va {
+                                    return Err(());
+                                }
+                            }
+                        } else if ra < rb {
+                            if let (Some(va), Some(vb)) = (pa.n, pb.n) {
+                                if va >= vb {
+                                    return Err(());
+                                }
+                            }
+                        } else if let (Some(va), Some(vb)) = (pa.n, pb.n) {
+                            if va != vb {
+                                return Err(());
+                            }
+                        }
+                        // S: B south of A ⇒ count_B(S) < count_A(S)
+                        if rb > ra {
+                            if let (Some(vb), Some(va)) = (pb.s, pa.s) {
+                                if vb >= va {
+                                    return Err(());
+                                }
+                            }
+                        } else if ra > rb {
+                            if let (Some(va), Some(vb)) = (pa.s, pb.s) {
+                                if va >= vb {
+                                    return Err(());
+                                }
+                            }
+                        } else if let (Some(va), Some(vb)) = (pa.s, pb.s) {
+                            if va != vb {
+                                return Err(());
+                            }
+                        }
+                        // E: B east of A ⇒ count_B(E) < count_A(E)
+                        if colb > cola {
+                            if let (Some(vb), Some(va)) = (pb.e, pa.e) {
+                                if vb >= va {
+                                    return Err(());
+                                }
+                            }
+                        } else if cola > colb {
+                            if let (Some(va), Some(vb)) = (pa.e, pb.e) {
+                                if va >= vb {
+                                    return Err(());
+                                }
+                            }
+                        } else if let (Some(va), Some(vb)) = (pa.e, pb.e) {
+                            if va != vb {
+                                return Err(());
+                            }
+                        }
+                        // W: B west of A ⇒ count_B(W) < count_A(W)
+                        if colb < cola {
+                            if let (Some(vb), Some(va)) = (pb.w, pa.w) {
+                                if vb >= va {
+                                    return Err(());
+                                }
+                            }
+                        } else if cola < colb {
+                            if let (Some(va), Some(vb)) = (pa.w, pb.w) {
+                                if va >= vb {
+                                    return Err(());
+                                }
+                            }
+                        } else if let (Some(va), Some(vb)) = (pa.w, pb.w) {
+                            if va != vb {
+                                return Err(());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply compass-forced cuts (after pair-wise checks, to drop borrow)
+        for &e in &compass_forced_cuts {
+            if self.edges[e] == EdgeState::Unknown {
+                if !self.set_edge(e, EdgeState::Cut) {
+                    return Err(());
+                }
+                progress = true;
             }
         }
 
