@@ -158,9 +158,9 @@ impl Solver {
     }
 
     pub(crate) fn try_single_shape(&mut self, shape: &Shape) {
-        let saved_bank = self.puzzle.rules.shape_bank.clone();
-        let saved_transforms = self.shape_transforms.clone();
-        let saved_canonicals = self.shape_bank_canonicals.clone();
+        let saved_bank = std::mem::take(&mut self.puzzle.rules.shape_bank);
+        let saved_transforms = std::mem::take(&mut self.shape_transforms);
+        let saved_canonicals = std::mem::take(&mut self.shape_bank_canonicals);
 
         self.puzzle.rules.shape_bank = vec![shape.clone()];
         self.prepare_shape_transforms();

@@ -10,6 +10,7 @@ impl Solver {
             return false;
         }
         self.edges[e] = s;
+        self.curr_unknown -= 1;
         self.changed.push((e, EdgeState::Unknown));
         true
     }
@@ -17,6 +18,9 @@ impl Solver {
     pub(crate) fn restore(&mut self, snap: usize) {
         while self.changed.len() > snap {
             let (e, old_state) = self.changed.pop().unwrap();
+            if self.edges[e] != EdgeState::Unknown && old_state == EdgeState::Unknown {
+                self.curr_unknown += 1;
+            }
             self.edges[e] = old_state;
         }
     }

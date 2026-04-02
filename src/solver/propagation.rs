@@ -1,7 +1,6 @@
 use super::Solver;
 use crate::polyomino::Rotation;
 use crate::types::*;
-use std::collections::{HashMap, VecDeque};
 
 impl Solver {
     pub(crate) fn propagate(&mut self) -> Result<bool, ()> {
@@ -56,45 +55,54 @@ impl Solver {
     pub(crate) fn propagate_area_bounds(&mut self) -> Result<bool, ()> {
         let mut progress = false;
         let n = self.grid.num_cells();
-        let mut comp = vec![usize::MAX; n];
+        self.comp_buf.fill(usize::MAX);
 
         for c in 0..n {
-            if !self.grid.cell_exists[c] || comp[c] != usize::MAX {
+            if !self.grid.cell_exists[c] || self.comp_buf[c] != usize::MAX {
                 continue;
             }
-            self.flood_fill_decided(c, &mut comp);
+            self.flood_fill_decided(c);
         }
 
-        let mut comp_map: HashMap<usize, usize> = HashMap::new();
         let mut num_comp = 0usize;
-        let mut comp_id = vec![usize::MAX; n];
+        // reuse comp_buf values as IDs by mapping them to 0..num_comp
+        // but we can just use a small array for mapping if we want to be super fast, 
+        // or just use the fact that comp_buf[c] is the representative cell.
+        // Let's use a temporary mapping array to keep IDs contiguous.
+        let mut id_map = vec![usize::MAX; n];
         for c in 0..n {
-            if !self.grid.cell_exists[c] || comp[c] == usize::MAX {
+            if !self.grid.cell_exists[c] {
                 continue;
             }
-            let id = *comp_map.entry(comp[c]).or_insert_with(|| {
-                let id = num_comp;
+            let rep = self.comp_buf[c];
+            if id_map[rep] == usize::MAX {
+                id_map[rep] = num_comp;
                 num_comp += 1;
-                id
-            });
-            comp_id[c] = id;
+            }
         }
 
-        let mut comp_sz = vec![0usize; num_comp];
-        let mut comp_clues = vec![Vec::new(); num_comp];
+        self.curr_comp_id.resize(n, usize::MAX);
         for c in 0..n {
             if self.grid.cell_exists[c] {
-                let ci = comp_id[c];
-                comp_sz[ci] += 1;
-                for clue in &self.puzzle.cell_clues {
-                    if clue.cell() == c {
-                        comp_clues[ci].push(clue);
-                    }
+                self.curr_comp_id[c] = id_map[self.comp_buf[c]];
+            }
+        }
+
+        self.curr_comp_sz.clear();
+        self.curr_comp_sz.resize(num_comp, 0);
+        let mut comp_clues = vec![Vec::new(); num_comp]; // This one is still a bit heavy, but clues are few
+        for c in 0..n {
+            if self.grid.cell_exists[c] {
+                let ci = self.curr_comp_id[c];
+                self.curr_comp_sz[ci] += 1;
+                for &clue_idx in &self.cell_clues_indexed[c] {
+                    comp_clues[ci].push(&self.puzzle.cell_clues[clue_idx]);
                 }
             }
         }
 
-        let mut target_area = vec![None; num_comp];
+        self.curr_target_area.clear();
+        self.curr_target_area.resize(num_comp, None);
         for ci in 0..num_comp {
             let mut areas = Vec::new();
             for clue in &comp_clues[ci] {
@@ -109,28 +117,23 @@ impl Solver {
                 return Err(());
             }
 
-            // Still check for consistent areas if multiple clues present
             if !areas.is_empty() {
                 let a0 = areas[0];
                 if areas.iter().any(|&a| a != a0) {
                     return Err(());
                 }
-                target_area[ci] = Some(a0);
-                if comp_sz[ci] > a0 {
+                self.curr_target_area[ci] = Some(a0);
+                if self.curr_comp_sz[ci] > a0 {
                     return Err(());
                 }
-            } else if comp_sz[ci] > self.eff_max_area {
+            } else if self.curr_comp_sz[ci] > self.eff_max_area {
                 return Err(());
             }
         }
 
-        // Update cache for select_edge
-        self.curr_comp_id = comp_id.clone();
-        self.curr_comp_sz = comp_sz.clone();
-        self.curr_target_area = target_area.clone();
-
         // Check Unknown edges to outside
-        let mut can_grow = vec![false; num_comp];
+        self.can_grow_buf.clear();
+        self.can_grow_buf.resize(num_comp, false);
         let mut growth_edges = vec![Vec::new(); num_comp];
 
         for e in 0..self.grid.num_edges() {
@@ -141,13 +144,13 @@ impl Solver {
             if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
                 continue;
             }
-            let ci1 = comp_id[c1];
-            let ci2 = comp_id[c2];
+            let ci1 = self.curr_comp_id[c1];
+            let ci2 = self.curr_comp_id[c2];
             if ci1 != ci2 {
                 let cannot_merge = if self.puzzle.rules.solitude {
-                    target_area[ci1].is_some() && target_area[ci2].is_some()
+                    self.curr_target_area[ci1].is_some() && self.curr_target_area[ci2].is_some()
                 } else {
-                    if let (Some(a1), Some(a2)) = (target_area[ci1], target_area[ci2]) {
+                    if let (Some(a1), Some(a2)) = (self.curr_target_area[ci1], self.curr_target_area[ci2]) {
                         a1 != a2
                     } else {
                         false
@@ -162,15 +165,15 @@ impl Solver {
                     continue;
                 }
 
-                can_grow[ci1] = true;
-                can_grow[ci2] = true;
+                self.can_grow_buf[ci1] = true;
+                self.can_grow_buf[ci2] = true;
                 growth_edges[ci1].push(e);
                 growth_edges[ci2].push(e);
 
-                let limit1 = target_area[ci1].unwrap_or(self.eff_max_area);
-                let limit2 = target_area[ci2].unwrap_or(self.eff_max_area);
+                let limit1 = self.curr_target_area[ci1].unwrap_or(self.eff_max_area);
+                let limit2 = self.curr_target_area[ci2].unwrap_or(self.eff_max_area);
 
-                if comp_sz[ci1] >= limit1 || comp_sz[ci2] >= limit2 {
+                if self.curr_comp_sz[ci1] >= limit1 || self.curr_comp_sz[ci2] >= limit2 {
                     if !self.set_edge(e, EdgeState::Cut) {
                         return Err(());
                     }
@@ -180,19 +183,21 @@ impl Solver {
         }
 
         for ci in 0..num_comp {
-            if let Some(target) = target_area[ci] {
-                if comp_sz[ci] < target && !can_grow[ci] {
+            if let Some(target) = self.curr_target_area[ci] {
+                if self.curr_comp_sz[ci] < target && !self.can_grow_buf[ci] {
                     return Err(());
                 }
-                if comp_sz[ci] == target && can_grow[ci] {
+                if self.curr_comp_sz[ci] == target && self.can_grow_buf[ci] {
                     for &e in &growth_edges[ci] {
-                        if !self.set_edge(e, EdgeState::Cut) {
-                            return Err(());
+                        if self.edges[e] == EdgeState::Unknown {
+                            if !self.set_edge(e, EdgeState::Cut) {
+                                return Err(());
+                            }
+                            progress = true;
                         }
-                        progress = true;
                     }
                 }
-            } else if self.eff_min_area > 1 && comp_sz[ci] < self.eff_min_area && !can_grow[ci] {
+            } else if self.eff_min_area > 1 && self.curr_comp_sz[ci] < self.eff_min_area && !self.can_grow_buf[ci] {
                 return Err(());
             }
         }
@@ -205,7 +210,7 @@ impl Solver {
             if !self.grid.cell_exists[*cell] {
                 continue;
             }
-            let ci = comp_id[*cell];
+            let ci = self.curr_comp_id[*cell];
             if ci == usize::MAX {
                 continue;
             }
@@ -214,7 +219,7 @@ impl Solver {
 
             let mut counts = [0usize; 4]; // N, S, E, W
             for c in 0..n {
-                if self.grid.cell_exists[c] && comp_id[c] == ci {
+                if self.grid.cell_exists[c] && self.curr_comp_id[c] == ci {
                     let (pr, pc) = self.grid.cell_pos(c);
                     let dr = pr as isize - cr_i;
                     let dc = pc as isize - cc_i;
@@ -249,7 +254,7 @@ impl Solver {
                     // At limit: cut growth edges in this direction
                     for &e in &growth_edges[ci] {
                         let (c1, c2) = self.grid.edge_cells(e);
-                        let other = if comp_id[c1] == ci { c2 } else { c1 };
+                        let other = if self.curr_comp_id[c1] == ci { c2 } else { c1 };
                         let (pr, pc) = self.grid.cell_pos(other);
                         let matches = match idx {
                             0 => (pr as isize) < cr_i,
@@ -264,7 +269,7 @@ impl Solver {
                     }
                 }
 
-                if !can_grow[ci] && counts[idx] < v {
+                if !self.can_grow_buf[ci] && counts[idx] < v {
                     return Err(());
                 }
             }
@@ -272,14 +277,12 @@ impl Solver {
 
         // Pair-wise compass consistency within same component
         {
-            // Build compass-per-component list directly (avoids extending the
-            // comp_clues borrow past earlier set_edge calls)
             let mut compass_per_comp: Vec<Vec<(CellId, CompassData)>> =
                 vec![Vec::new(); num_comp];
             for cl in &self.puzzle.cell_clues {
                 if let CellClue::Compass { cell, compass } = cl {
                     if self.grid.cell_exists[*cell] {
-                        let ci = comp_id[*cell];
+                        let ci = self.curr_comp_id[*cell];
                         if ci != usize::MAX {
                             compass_per_comp[ci].push((*cell, compass.clone()));
                         }
@@ -295,201 +298,111 @@ impl Solver {
                         let (ra, cola) = self.grid.cell_pos(*ca);
                         let (rb, colb) = self.grid.cell_pos(*cb);
 
-                        // Zero-value: if A has D=0, no cell may be in direction D of A
-                        if pa.n == Some(0) && rb < ra {
-                            return Err(());
-                        }
-                        if pb.n == Some(0) && ra < rb {
-                            return Err(());
-                        }
-                        if pa.s == Some(0) && rb > ra {
-                            return Err(());
-                        }
-                        if pb.s == Some(0) && ra > rb {
-                            return Err(());
-                        }
-                        if pa.e == Some(0) && colb > cola {
-                            return Err(());
-                        }
-                        if pb.e == Some(0) && cola > colb {
-                            return Err(());
-                        }
-                        if pa.w == Some(0) && colb < cola {
-                            return Err(());
-                        }
-                        if pb.w == Some(0) && cola < colb {
-                            return Err(());
-                        }
+                        if pa.n == Some(0) && rb < ra { return Err(()); }
+                        if pb.n == Some(0) && ra < rb { return Err(()); }
+                        if pa.s == Some(0) && rb > ra { return Err(()); }
+                        if pb.s == Some(0) && ra > rb { return Err(()); }
+                        if pa.e == Some(0) && colb > cola { return Err(()); }
+                        if pb.e == Some(0) && cola > colb { return Err(()); }
+                        if pa.w == Some(0) && colb < cola { return Err(()); }
+                        if pb.w == Some(0) && cola < colb { return Err(()); }
 
-                        // Strict subset: B north of A ⇒ count_B(N) < count_A(N)
-                        // (B itself is counted in A's N but not in B's own N)
-                        // So v_B(N) must be strictly less than v_A(N).
                         if rb < ra {
                             if let (Some(vb), Some(va)) = (pb.n, pa.n) {
-                                if vb >= va {
-                                    return Err(());
-                                }
+                                if vb >= va { return Err(()); }
                             }
                         } else if ra < rb {
                             if let (Some(va), Some(vb)) = (pa.n, pb.n) {
-                                if va >= vb {
-                                    return Err(());
-                                }
+                                if va >= vb { return Err(()); }
                             }
                         } else if let (Some(va), Some(vb)) = (pa.n, pb.n) {
-                            if va != vb {
-                                return Err(());
-                            }
+                            if va != vb { return Err(()); }
                         }
-                        // S: B south of A ⇒ count_B(S) < count_A(S)
                         if rb > ra {
                             if let (Some(vb), Some(va)) = (pb.s, pa.s) {
-                                if vb >= va {
-                                    return Err(());
-                                }
+                                if vb >= va { return Err(()); }
                             }
                         } else if ra > rb {
                             if let (Some(va), Some(vb)) = (pa.s, pb.s) {
-                                if va >= vb {
-                                    return Err(());
-                                }
+                                if va >= vb { return Err(()); }
                             }
                         } else if let (Some(va), Some(vb)) = (pa.s, pb.s) {
-                            if va != vb {
-                                return Err(());
-                            }
+                            if va != vb { return Err(()); }
                         }
-                        // E: B east of A ⇒ count_B(E) < count_A(E)
                         if colb > cola {
                             if let (Some(vb), Some(va)) = (pb.e, pa.e) {
-                                if vb >= va {
-                                    return Err(());
-                                }
+                                if vb >= va { return Err(()); }
                             }
                         } else if cola > colb {
                             if let (Some(va), Some(vb)) = (pa.e, pb.e) {
-                                if va >= vb {
-                                    return Err(());
-                                }
+                                if va >= vb { return Err(()); }
                             }
                         } else if let (Some(va), Some(vb)) = (pa.e, pb.e) {
-                            if va != vb {
-                                return Err(());
-                            }
+                            if va != vb { return Err(()); }
                         }
-                        // W: B west of A ⇒ count_B(W) < count_A(W)
                         if colb < cola {
                             if let (Some(vb), Some(va)) = (pb.w, pa.w) {
-                                if vb >= va {
-                                    return Err(());
-                                }
+                                if vb >= va { return Err(()); }
                             }
                         } else if cola < colb {
                             if let (Some(va), Some(vb)) = (pa.w, pb.w) {
-                                if va >= vb {
-                                    return Err(());
-                                }
+                                if va >= vb { return Err(()); }
                             }
                         } else if let (Some(va), Some(vb)) = (pa.w, pb.w) {
-                            if va != vb {
-                                return Err(());
-                            }
+                            if va != vb { return Err(()); }
                         }
                     }
                 }
             }
         }
 
-        // Apply compass-forced cuts (after pair-wise checks, to drop borrow)
         for &e in &compass_forced_cuts {
             if self.edges[e] == EdgeState::Unknown {
-                if !self.set_edge(e, EdgeState::Cut) {
-                    return Err(());
-                }
+                if !self.set_edge(e, EdgeState::Cut) { return Err(()); }
                 progress = true;
             }
         }
 
-        // Non-boxy / boxy: check fully-formed components
         if self.puzzle.rules.non_boxy || self.puzzle.rules.boxy {
             for ci in 0..num_comp {
-                if can_grow[ci] {
-                    continue;
-                }
-                let mut min_r = self.grid.rows;
-                let mut max_r = 0usize;
-                let mut min_c = self.grid.cols;
-                let mut max_c = 0usize;
-                let mut cell_count = 0usize;
+                if self.can_grow_buf[ci] { continue; }
+                let (mut min_r, mut max_r, mut min_c, mut max_c, mut cell_count) = (self.grid.rows, 0, self.grid.cols, 0, 0);
                 for c in 0..n {
-                    if self.grid.cell_exists[c] && comp_id[c] == ci {
+                    if self.grid.cell_exists[c] && self.curr_comp_id[c] == ci {
                         let (r, col) = self.grid.cell_pos(c);
-                        min_r = min_r.min(r);
-                        max_r = max_r.max(r);
-                        min_c = min_c.min(col);
-                        max_c = max_c.max(col);
+                        min_r = min_r.min(r); max_r = max_r.max(r);
+                        min_c = min_c.min(col); max_c = max_c.max(col);
                         cell_count += 1;
                     }
                 }
-                if cell_count == 0 {
-                    continue;
-                }
+                if cell_count == 0 { continue; }
                 let is_rect = cell_count == (max_r - min_r + 1) * (max_c - min_c + 1);
-                if self.puzzle.rules.non_boxy && is_rect {
-                    return Err(());
-                }
-                if self.puzzle.rules.boxy && !is_rect {
-                    return Err(());
-                }
+                if self.puzzle.rules.non_boxy && is_rect { return Err(()); }
+                if self.puzzle.rules.boxy && !is_rect { return Err(()); }
             }
         }
 
-        // Inequality propagation for Cut edges between known components
         for clue in &self.puzzle.edge_clues {
-            let EdgeClueKind::Inequality { smaller_first } = clue.kind else {
-                continue;
-            };
+            let EdgeClueKind::Inequality { smaller_first } = clue.kind else { continue; };
             let e = clue.edge;
-            if self.edges[e] != EdgeState::Cut {
-                continue;
-            }
+            if self.edges[e] != EdgeState::Cut { continue; }
             let (c1, c2) = self.grid.edge_cells(e);
-            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
-                continue;
-            }
-            let ci1 = comp_id[c1];
-            let ci2 = comp_id[c2];
-            if ci1 == ci2 {
-                continue;
-            }
-            let (smaller_ci, larger_ci) = if smaller_first {
-                (ci1, ci2)
-            } else {
-                (ci2, ci1)
-            };
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] { continue; }
+            let ci1 = self.curr_comp_id[c1];
+            let ci2 = self.curr_comp_id[c2];
+            if ci1 == ci2 { continue; }
+            let (smaller_ci, larger_ci) = if smaller_first { (ci1, ci2) } else { (ci2, ci1) };
+            let smaller_done = !self.can_grow_buf[smaller_ci];
+            let larger_done = !self.can_grow_buf[larger_ci];
 
-            let smaller_done = !can_grow[smaller_ci];
-            let larger_done = !can_grow[larger_ci];
-
-            // Both fully formed: directly compare
             if smaller_done && larger_done {
-                if comp_sz[smaller_ci] >= comp_sz[larger_ci] {
-                    return Err(());
-                }
+                if self.curr_comp_sz[smaller_ci] >= self.curr_comp_sz[larger_ci] { return Err(()); }
                 continue;
             }
-
-            // Larger piece fully formed but too small
-            if larger_done && comp_sz[larger_ci] <= comp_sz[smaller_ci] {
-                return Err(());
-            }
-
-            // Smaller piece fully formed but too large
+            if larger_done && self.curr_comp_sz[larger_ci] <= self.curr_comp_sz[smaller_ci] { return Err(()); }
             if smaller_done {
-                let max_larger = target_area[larger_ci].unwrap_or(self.eff_max_area);
-                if comp_sz[smaller_ci] >= max_larger {
-                    return Err(());
-                }
+                let max_larger = self.curr_target_area[larger_ci].unwrap_or(self.eff_max_area);
+                if self.curr_comp_sz[smaller_ci] >= max_larger { return Err(()); }
             }
         }
 
@@ -700,20 +613,20 @@ impl Solver {
         Ok(progress)
     }
 
-    pub(crate) fn flood_fill_decided(&self, start: CellId, comp: &mut [usize]) {
-        comp[start] = start;
-        let mut q = VecDeque::new();
-        q.push_back(start);
-        while let Some(cur) = q.pop_front() {
+    pub(crate) fn flood_fill_decided(&mut self, start: CellId) {
+        self.comp_buf[start] = start;
+        self.q_buf.clear();
+        self.q_buf.push(start);
+        while let Some(cur) = self.q_buf.pop() {
             for eid in self.grid.cell_edges(cur).into_iter().flatten() {
                 let (c1, c2) = self.grid.edge_cells(eid);
                 let other = if c1 == cur { c2 } else { c1 };
-                if !self.grid.cell_exists[other] || comp[other] != usize::MAX {
+                if !self.grid.cell_exists[other] || self.comp_buf[other] != usize::MAX {
                     continue;
                 }
                 if self.edges[eid] == EdgeState::Uncut {
-                    comp[other] = start;
-                    q.push_back(other);
+                    self.comp_buf[other] = start;
+                    self.q_buf.push(other);
                 }
             }
         }
@@ -832,12 +745,12 @@ mod tests {
         let v_edge = s.grid.v_edge(0, 0);
         let _ = s.set_edge(v_edge, EdgeState::Uncut);
 
-        let mut comp = vec![usize::MAX; s.grid.num_cells()];
-        s.flood_fill_decided(s.grid.cell_id(0, 0), &mut comp);
+        s.comp_buf.fill(usize::MAX);
+        s.flood_fill_decided(s.grid.cell_id(0, 0));
 
         // Cell (0,0) and (0,1) should have same component id
-        assert_eq!(comp[s.grid.cell_id(0, 0)], comp[s.grid.cell_id(0, 1)]);
+        assert_eq!(s.comp_buf[s.grid.cell_id(0, 0)], s.comp_buf[s.grid.cell_id(0, 1)]);
         // Cell (1,0) should be in a different component
-        assert_ne!(comp[s.grid.cell_id(0, 0)], comp[s.grid.cell_id(1, 0)]);
+        assert_ne!(s.comp_buf[s.grid.cell_id(0, 0)], s.comp_buf[s.grid.cell_id(1, 0)]);
     }
 }

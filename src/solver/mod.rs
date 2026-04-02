@@ -30,19 +30,37 @@ pub struct Solver {
     pub(crate) node_count: u64,
     pub(crate) next_report: u64,
     pub(crate) total_unknown: usize,
+    pub(crate) curr_unknown: usize,
     // Cached component info from last propagate()
     pub(crate) curr_comp_id: Vec<usize>,
     pub(crate) curr_comp_sz: Vec<usize>,
     pub(crate) curr_target_area: Vec<Option<usize>>,
+    // Reusable buffers for propagation
+    pub(crate) comp_buf: Vec<usize>,
+    pub(crate) q_buf: Vec<usize>,
+    pub(crate) can_grow_buf: Vec<bool>,
     // Dedup for match coupled solver: tracks seen piece1 cell sets
     pub(crate) seen_partitions: HashSet<Vec<CellId>>,
     // Whether shape bank was auto-populated (affects solve strategy)
     pub(crate) auto_populated_bank: bool,
+    // Pre-calculated cell clue info
+    pub(crate) cell_clues_indexed: Vec<Vec<usize>>, // indices into self.puzzle.cell_clues
+    pub(crate) has_any_clue: Vec<bool>,
 }
 
 impl Solver {
     pub fn new(puzzle: Puzzle, grid: Grid) -> Self {
         let n = grid.num_edges();
+        let nc = grid.num_cells();
+
+        let mut cell_clues_indexed = vec![vec![]; nc];
+        let mut has_any_clue = vec![false; nc];
+        for (i, clue) in puzzle.cell_clues.iter().enumerate() {
+            let c = clue.cell();
+            cell_clues_indexed[c].push(i);
+            has_any_clue[c] = true;
+        }
+
         Self {
             puzzle,
             grid,
@@ -60,11 +78,17 @@ impl Solver {
             node_count: 0,
             next_report: 10_000,
             total_unknown: 0,
+            curr_unknown: n,
             curr_comp_id: Vec::new(),
             curr_comp_sz: Vec::new(),
             curr_target_area: Vec::new(),
+            comp_buf: vec![usize::MAX; nc],
+            q_buf: Vec::with_capacity(nc),
+            can_grow_buf: Vec::new(),
             seen_partitions: HashSet::new(),
             auto_populated_bank: false,
+            cell_clues_indexed,
+            has_any_clue,
         }
     }
 
@@ -80,22 +104,25 @@ impl Solver {
         self.compute_area_bounds();
         self.total_cells = self.grid.total_existing_cells();
 
+        // Initial unknown count
+        self.curr_unknown = self.edges.iter().filter(|&&e| e == EdgeState::Unknown).count();
+
         // Set pre-cut edges for missing cells
         for e in 0..self.grid.num_edges() {
             let (c1, c2) = self.grid.edge_cells(e);
             if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
                 if self.edges[e] == EdgeState::Unknown {
-                    self.edges[e] = EdgeState::Cut;
-                    self.changed.push((e, EdgeState::Unknown));
+                    self.set_edge(e, EdgeState::Cut);
                 }
             }
         }
         // Set edge clues to CUT
-        for clue in &self.puzzle.edge_clues {
-            if self.edges[clue.edge] == EdgeState::Unknown {
-                self.edges[clue.edge] = EdgeState::Cut;
-                self.changed.push((clue.edge, EdgeState::Unknown));
-            }
+        let edge_clues_to_set: Vec<EdgeId> = self.puzzle.edge_clues.iter()
+            .map(|clue| clue.edge)
+            .filter(|&e| self.edges[e] == EdgeState::Unknown)
+            .collect();
+        for eid in edge_clues_to_set {
+            self.set_edge(eid, EdgeState::Cut);
         }
         self.propagate_palisade();
 
@@ -134,11 +161,7 @@ impl Solver {
         }
 
         // Count remaining unknown edges for progress display
-        self.total_unknown = self
-            .edges
-            .iter()
-            .filter(|&&e| e == EdgeState::Unknown)
-            .count();
+        self.total_unknown = self.curr_unknown;
 
         // For precision puzzles without explicit shape bank, auto-populate
         // with all free polyominoes of the required size (much faster piece-based search)
@@ -158,14 +181,9 @@ impl Solver {
 
     fn report_progress(&mut self) {
         if self.node_count >= self.next_report {
-            let unknown = self
-                .edges
-                .iter()
-                .filter(|&&e| e == EdgeState::Unknown)
-                .count();
             eprint!(
                 "\rnodes: {:>10} | remaining unknown: {:>4}/{:<4}",
-                self.node_count, unknown, self.total_unknown
+                self.node_count, self.curr_unknown, self.total_unknown
             );
             let _ = std::io::Write::flush(&mut std::io::stderr());
             self.next_report = self.node_count + self.next_report / 2;

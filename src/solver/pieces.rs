@@ -9,8 +9,6 @@ impl Solver {
         &self,
         cells: &[CellId],
         shape_idx: usize,
-        cell_clues: &[Vec<&CellClue>],
-        has_any_clue: &[bool],
         rose_symbols: &[u8],
     ) -> bool {
         // Internal edges must not be Cut or Pre-cut
@@ -41,7 +39,7 @@ impl Solver {
         if self.puzzle.rules.solitude {
             let mut clue_count = 0;
             for &cid in cells {
-                if has_any_clue[cid] {
+                if self.has_any_clue[cid] {
                     clue_count += 1;
                 }
             }
@@ -54,13 +52,15 @@ impl Solver {
         for &sym in rose_symbols {
             let mut found = false;
             for &cid in cells {
-                if cell_clues[cid]
-                    .iter()
-                    .any(|cl| matches!(cl, CellClue::Rose { symbol, .. } if *symbol == sym))
-                {
-                    if found {
-                        return false;
-                    } // already found one
+                let has_sym = self.cell_clues_indexed[cid].iter().any(|&idx| {
+                    if let CellClue::Rose { symbol, .. } = &self.puzzle.cell_clues[idx] {
+                        *symbol == sym
+                    } else {
+                        false
+                    }
+                });
+                if has_sym {
+                    if found { return false; } // already found one
                     found = true;
                 }
             }
@@ -71,8 +71,8 @@ impl Solver {
 
         // Local cell clues
         for &cid in cells {
-            for clue in &cell_clues[cid] {
-                match clue {
+            for &idx in &self.cell_clues_indexed[cid] {
+                match &self.puzzle.cell_clues[idx] {
                     CellClue::Area { value, .. } => {
                         if cells.len() != *value {
                             return false;
@@ -112,39 +112,15 @@ impl Solver {
                             let (pr, pc) = self.grid.cell_pos(ocid);
                             let dr = pr as isize - cr;
                             let dc = pc as isize - cc;
-                            if dr < 0 {
-                                nc += 1;
-                            }
-                            if dr > 0 {
-                                sc += 1;
-                            }
-                            if dc > 0 {
-                                ec += 1;
-                            }
-                            if dc < 0 {
-                                wc += 1;
-                            }
+                            if dr < 0 { nc += 1; }
+                            if dr > 0 { sc += 1; }
+                            if dc > 0 { ec += 1; }
+                            if dc < 0 { wc += 1; }
                         }
-                        if let Some(v) = compass.e {
-                            if v != ec {
-                                return false;
-                            }
-                        }
-                        if let Some(v) = compass.w {
-                            if v != wc {
-                                return false;
-                            }
-                        }
-                        if let Some(v) = compass.s {
-                            if v != sc {
-                                return false;
-                            }
-                        }
-                        if let Some(v) = compass.n {
-                            if v != nc {
-                                return false;
-                            }
-                        }
+                        if let Some(v) = compass.e { if v != ec { return false; } }
+                        if let Some(v) = compass.w { if v != wc { return false; } }
+                        if let Some(v) = compass.s { if v != sc { return false; } }
+                        if let Some(v) = compass.n { if v != nc { return false; } }
                     }
                     CellClue::Rose { .. } => {}
                 }
@@ -157,12 +133,8 @@ impl Solver {
     fn generate_placements(&self, cell_min: &[usize], cell_max: &[usize]) -> Vec<Piece> {
         let mut placements = Vec::new();
 
-        let mut cell_clues: Vec<Vec<&CellClue>> = vec![vec![]; self.grid.num_cells()];
-        let mut has_any_clue = vec![false; self.grid.num_cells()];
         let mut rose_symbols_set = HashSet::new();
         for clue in &self.puzzle.cell_clues {
-            cell_clues[clue.cell()].push(clue);
-            has_any_clue[clue.cell()] = true;
             if let CellClue::Rose { symbol, .. } = clue {
                 rose_symbols_set.insert(*symbol);
             }
@@ -208,8 +180,6 @@ impl Solver {
                         if self.is_placement_valid(
                             &cells,
                             si,
-                            &cell_clues,
-                            &has_any_clue,
                             &rose_symbols,
                         ) {
                             placements.push(Piece {
@@ -283,37 +253,44 @@ impl Solver {
                 dlx.add_row(i, &cols);
             }
 
-            let mut solution = Vec::new();
-            dlx.search(&mut solution, &mut |sol_rows| {
-                let pieces: Vec<Piece> = sol_rows
-                    .iter()
-                    .map(|&idx| placements[idx].1.clone())
-                    .collect();
-                let old_edges = self.edges.clone();
-                for piece in &pieces {
-                    for &cid in &piece.cells {
-                        for eid in grid.cell_edges(cid).into_iter().flatten() {
-                            let (c1, c2) = grid.edge_cells(eid);
-                            let other = if c1 == cid { c2 } else { c1 };
-                            if !grid.cell_exists[other]
-                                || piece.cells.binary_search(&other).is_err()
-                            {
-                                self.edges[eid] = EdgeState::Cut;
-                            } else {
-                                self.edges[eid] = EdgeState::Uncut;
+                let mut cell_to_piece = vec![usize::MAX; num_cells];
+                let mut solution = Vec::new();
+                dlx.search(&mut solution, &mut |sol_rows| {
+                    let snap = self.changed.len();
+                    let pieces: Vec<Piece> = sol_rows
+                        .iter()
+                        .enumerate()
+                        .map(|(pi, &idx)| {
+                            let p = placements[idx].1.clone();
+                            for &cid in &p.cells { cell_to_piece[cid] = pi; }
+                            p
+                        })
+                        .collect();
+
+                    // Temporary set edges based on pieces for validation
+                    for piece in &pieces {
+                        for &cid in &piece.cells {
+                            for eid in grid.cell_edges(cid).into_iter().flatten() {
+                                let (c1, c2) = grid.edge_cells(eid);
+                                let other = if c1 == cid { c2 } else { c1 };
+                                if !grid.cell_exists[other] || cell_to_piece[other] != cell_to_piece[cid] {
+                                    self.set_edge(eid, EdgeState::Cut);
+                                } else {
+                                    self.set_edge(eid, EdgeState::Uncut);
+                                }
                             }
                         }
                     }
-                }
-                if self.validate(&pieces) {
-                    self.solution_count += 1;
-                    self.best_pieces = pieces;
-                    self.best_edges = self.edges.clone();
-                    self.report_solution(self.solution_count);
-                }
-                self.edges = old_edges;
-                self.solution_count < 2
-            });
+
+                    if self.validate(&pieces) {
+                        self.solution_count += 1;
+                        self.best_pieces = pieces;
+                        self.best_edges = self.edges.clone();
+                        self.report_solution(self.solution_count);
+                    }
+                    self.restore(snap);
+                    self.solution_count < 2
+                });
         } else {
             // Compute cell area bounds from inequality constraints (arc consistency)
             let n = self.grid.num_cells();
@@ -456,67 +433,81 @@ impl Solver {
                     true
                 };
 
+                let mut cell_to_piece_final = vec![usize::MAX; num_cells_total];
                 let mut solution = Vec::new();
                 dlx.search_with_check(&mut solution, &mut row_check, &mut |sol_rows| {
+                    let snap = self.changed.len();
                     let pieces: Vec<Piece> = sol_rows
                         .iter()
-                        .map(|&idx| placements[idx].clone())
+                        .enumerate()
+                        .map(|(pi, &idx)| {
+                            let p = placements[idx].clone();
+                            for &cid in &p.cells { cell_to_piece_final[cid] = pi; }
+                            p
+                        })
                         .collect();
-                    let old_edges = self.edges.clone();
+
+                    // Temporary set edges based on pieces for validation
                     for piece in &pieces {
                         for &cid in &piece.cells {
                             for eid in grid.cell_edges(cid).into_iter().flatten() {
                                 let (c1, c2) = grid.edge_cells(eid);
                                 let other = if c1 == cid { c2 } else { c1 };
-                                if !grid.cell_exists[other]
-                                    || piece.cells.binary_search(&other).is_err()
-                                {
-                                    self.edges[eid] = EdgeState::Cut;
+                                if !grid.cell_exists[other] || cell_to_piece_final[other] != cell_to_piece_final[cid] {
+                                    self.set_edge(eid, EdgeState::Cut);
                                 } else {
-                                    self.edges[eid] = EdgeState::Uncut;
+                                    self.set_edge(eid, EdgeState::Uncut);
                                 }
                             }
                         }
                     }
+
                     if self.validate(&pieces) {
                         self.solution_count += 1;
                         self.best_pieces = pieces;
                         self.best_edges = self.edges.clone();
                         self.report_solution(self.solution_count);
                     }
-                    self.edges = old_edges;
+                    self.restore(snap);
                     self.solution_count < 2
                 });
             } else {
+                let mut cell_to_piece_simple = vec![usize::MAX; num_cells];
                 let mut solution = Vec::new();
                 dlx.search(&mut solution, &mut |sol_rows| {
+                    let snap = self.changed.len();
                     let pieces: Vec<Piece> = sol_rows
                         .iter()
-                        .map(|&idx| placements[idx].clone())
+                        .enumerate()
+                        .map(|(pi, &idx)| {
+                            let p = placements[idx].clone();
+                            for &cid in &p.cells { cell_to_piece_simple[cid] = pi; }
+                            p
+                        })
                         .collect();
-                    let old_edges = self.edges.clone();
+
+                    // Temporary set edges based on pieces for validation
                     for piece in &pieces {
                         for &cid in &piece.cells {
                             for eid in grid.cell_edges(cid).into_iter().flatten() {
                                 let (c1, c2) = grid.edge_cells(eid);
                                 let other = if c1 == cid { c2 } else { c1 };
-                                if !grid.cell_exists[other]
-                                    || piece.cells.binary_search(&other).is_err()
-                                {
-                                    self.edges[eid] = EdgeState::Cut;
+                                if !grid.cell_exists[other] || cell_to_piece_simple[other] != cell_to_piece_simple[cid] {
+                                    self.set_edge(eid, EdgeState::Cut);
                                 } else {
-                                    self.edges[eid] = EdgeState::Uncut;
+                                    self.set_edge(eid, EdgeState::Uncut);
                                 }
                             }
                         }
                     }
+
                     if self.validate(&pieces) {
                         self.solution_count += 1;
                         self.best_pieces = pieces;
                         self.best_edges = self.edges.clone();
                         self.report_solution(self.solution_count);
                     }
-                    self.edges = old_edges;
+                    self.restore(snap);
                     self.solution_count < 2
                 });
             }

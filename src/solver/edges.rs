@@ -3,40 +3,54 @@ use crate::types::*;
 
 impl Solver {
     fn select_edge(&self) -> Option<EdgeId> {
+        let num_edges = self.grid.num_edges();
         if self.curr_comp_id.is_empty() {
-            return (0..self.grid.num_edges()).find(|&e| self.edges[e] == EdgeState::Unknown);
+            for e in 0..num_edges {
+                if self.edges[e] == EdgeState::Unknown {
+                    return Some(e);
+                }
+            }
+            return None;
         }
 
-        let best = (0..self.grid.num_edges())
-            .filter(|&e| self.edges[e] == EdgeState::Unknown)
-            .filter(|&e| {
-                let (c1, c2) = self.grid.edge_cells(e);
-                self.grid.cell_exists[c1] && self.grid.cell_exists[c2]
-            })
-            .map(|e| {
-                let (c1, c2) = self.grid.edge_cells(e);
-                let mut score = 0i32;
+        let mut best_e = None;
+        let mut best_score = i32::MIN;
 
-                for &cid in &[c1, c2] {
-                    let ci = self.curr_comp_id[cid];
-                    let current_sz = self.curr_comp_sz[ci];
+        for e in 0..num_edges {
+            if self.edges[e] != EdgeState::Unknown {
+                continue;
+            }
+            let (c1, c2) = self.grid.edge_cells(e);
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                continue;
+            }
 
-                    if let Some(target) = self.curr_target_area[ci] {
-                        if current_sz < target {
-                            score += 100;
-                        } else {
-                            score += 1;
-                        }
-                    } else {
-                        score += 10;
-                    }
-                }
+            let mut score = 0i32;
+            // Cell 1
+            let ci1 = self.curr_comp_id[c1];
+            let sz1 = self.curr_comp_sz[ci1];
+            if let Some(target) = self.curr_target_area[ci1] {
+                score += if sz1 < target { 100 } else { 1 };
+            } else {
+                score += 10;
+            }
+            // Cell 2
+            let ci2 = self.curr_comp_id[c2];
+            let sz2 = self.curr_comp_sz[ci2];
+            if let Some(target) = self.curr_target_area[ci2] {
+                score += if sz2 < target { 100 } else { 1 };
+            } else {
+                score += 10;
+            }
 
-                (e, score)
-            })
-            .max_by(|(_, s1), (_, s2)| s1.cmp(s2));
+            if score > best_score {
+                best_score = score;
+                best_e = Some(e);
+                if score >= 200 { break; } // Heuristic: found an edge between two needy components
+            }
+        }
 
-        best.map(|(e, _)| e)
+        best_e
     }
 
     pub(crate) fn backtrack_edges(&mut self) {
@@ -47,8 +61,7 @@ impl Solver {
         self.node_count += 1;
         self.report_progress();
 
-        let all_decided = (0..self.grid.num_edges()).all(|e| self.edges[e] != EdgeState::Unknown);
-        if all_decided {
+        if self.curr_unknown == 0 {
             let pieces = self.compute_pieces();
             if self.validate(&pieces) {
                 self.solution_count += 1;
