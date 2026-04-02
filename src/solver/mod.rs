@@ -3,6 +3,7 @@ mod edges;
 mod match_coupled;
 mod match_solver;
 mod pieces;
+mod progress;
 mod propagation;
 pub(crate) mod shapes;
 mod validation;
@@ -28,9 +29,9 @@ pub struct Solver {
     pub(crate) shape_bank_canonicals: Vec<Shape>,
     // Progress tracking
     pub(crate) node_count: u64,
-    pub(crate) next_report: u64,
     pub(crate) total_unknown: usize,
     pub(crate) curr_unknown: usize,
+    pub(crate) progress: progress::Progress,
     // Cached component info from last propagate()
     pub(crate) curr_comp_id: Vec<usize>,
     pub(crate) curr_comp_sz: Vec<usize>,
@@ -76,8 +77,8 @@ impl Solver {
             shape_transforms: Vec::new(),
             shape_bank_canonicals: Vec::new(),
             node_count: 0,
-            next_report: 10_000,
             total_unknown: 0,
+            progress: progress::Progress::new(),
             curr_unknown: n,
             curr_comp_id: Vec::new(),
             curr_comp_sz: Vec::new(),
@@ -101,6 +102,7 @@ impl Solver {
     }
 
     pub fn solve(&mut self) -> usize {
+        self.progress.reset();
         self.compute_area_bounds();
         self.total_cells = self.grid.total_existing_cells();
 
@@ -196,19 +198,15 @@ impl Solver {
         }
 
         // Clear the progress line
-        eprint!("\r{:>80}\r", "");
+        progress::Progress::clear_line();
 
         self.solution_count
     }
 
     fn report_progress(&mut self) {
-        if self.node_count >= self.next_report {
-            eprint!(
-                "\rnodes: {:>10} | remaining unknown: {:>4}/{:<4}",
-                self.node_count, self.curr_unknown, self.total_unknown
-            );
-            let _ = std::io::Write::flush(&mut std::io::stderr());
-            self.next_report = self.node_count + self.next_report / 2;
+        if let Some(elapsed_secs) = self.progress.should_report(self.node_count) {
+            self.progress
+                .print(elapsed_secs, self.node_count, self.curr_unknown, self.total_unknown);
         }
     }
 
@@ -228,7 +226,7 @@ impl Solver {
     /// Print the current best solution with a header. Called from all search paths.
     pub(crate) fn report_solution(&self, which: usize) {
         // Clear the progress line on stderr
-        eprint!("\r{:>80}\r", "");
+        progress::Progress::clear_line();
         let header = match which {
             1 => "First solution found:",
             2 => "Second solution found:",
