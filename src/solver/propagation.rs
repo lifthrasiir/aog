@@ -534,18 +534,12 @@ impl Solver {
                     || nc < 0
                     || nc >= self.grid.cols as isize
                 {
-                    if v > 0 {
-                        return Err(());
-                    }
-                    continue;
+                    continue; // v > 0 is fine: detour possible via other cells
                 }
 
                 let nid = self.grid.cell_id(nr as usize, nc as usize);
                 if !self.grid.cell_exists[nid] {
-                    if v > 0 {
-                        return Err(());
-                    }
-                    continue;
+                    continue; // v > 0 is fine: detour possible via other cells
                 }
 
                 let Some(edge) = self.grid.edge_between(*cell, nid) else {
