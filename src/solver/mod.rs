@@ -105,7 +105,11 @@ impl Solver {
         self.total_cells = self.grid.total_existing_cells();
 
         // Initial unknown count
-        self.curr_unknown = self.edges.iter().filter(|&&e| e == EdgeState::Unknown).count();
+        self.curr_unknown = self
+            .edges
+            .iter()
+            .filter(|&&e| e == EdgeState::Unknown)
+            .count();
 
         // Set pre-cut edges for missing cells
         for e in 0..self.grid.num_edges() {
@@ -117,7 +121,10 @@ impl Solver {
             }
         }
         // Set edge clues to CUT
-        let edge_clues_to_set: Vec<EdgeId> = self.puzzle.edge_clues.iter()
+        let edge_clues_to_set: Vec<EdgeId> = self
+            .puzzle
+            .edge_clues
+            .iter()
             .map(|clue| clue.edge)
             .filter(|&e| self.edges[e] == EdgeState::Unknown)
             .collect();
@@ -132,11 +139,22 @@ impl Solver {
 
         // Debug: count edges after propagation
         let n_cut = self.edges.iter().filter(|&&e| e == EdgeState::Cut).count();
-        let n_uncut = self.edges.iter().filter(|&&e| e == EdgeState::Uncut).count();
-        let n_unknown = self.edges.iter().filter(|&&e| e == EdgeState::Unknown).count();
+        let n_uncut = self
+            .edges
+            .iter()
+            .filter(|&&e| e == EdgeState::Uncut)
+            .count();
+        let n_unknown = self
+            .edges
+            .iter()
+            .filter(|&&e| e == EdgeState::Unknown)
+            .count();
         eprintln!(
             "after propagation: cut={}, uncut={}, unknown={}, total={}",
-            n_cut, n_uncut, n_unknown, n_cut + n_uncut + n_unknown
+            n_cut,
+            n_uncut,
+            n_unknown,
+            n_cut + n_uncut + n_unknown
         );
 
         // Dump grid structure
@@ -147,7 +165,11 @@ impl Solver {
                 let cid = self.grid.cell_id(r, c);
                 if self.grid.cell_exists[cid] {
                     // Check for rose clue
-                    let rose = self.puzzle.cell_clues.iter().find(|cl| matches!(cl, CellClue::Rose { cell, .. } if *cell == cid));
+                    let rose = self
+                        .puzzle
+                        .cell_clues
+                        .iter()
+                        .find(|cl| matches!(cl, CellClue::Rose { cell, .. } if *cell == cid));
                     if let Some(_) = rose {
                         row_str.push('A');
                     } else {

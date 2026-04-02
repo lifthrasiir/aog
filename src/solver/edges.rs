@@ -46,7 +46,9 @@ impl Solver {
             if score > best_score {
                 best_score = score;
                 best_e = Some(e);
-                if score >= 200 { break; } // Heuristic: found an edge between two needy components
+                if score >= 200 {
+                    break;
+                } // Heuristic: found an edge between two needy components
             }
         }
 

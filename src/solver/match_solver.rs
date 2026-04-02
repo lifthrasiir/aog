@@ -87,7 +87,9 @@ impl Solver {
                     let shapes = polyomino::enumerate_free_polyominoes(area);
                     eprintln!(
                         "\rmatch: area={}, {} pieces, {} free polyominoes",
-                        area, num_pieces, shapes.len()
+                        area,
+                        num_pieces,
+                        shapes.len()
                     );
                     for shape in &shapes {
                         if self.solution_count >= 2 {
@@ -221,12 +223,14 @@ mod tests {
         // Directly set rose clues on the puzzle
         let cell0 = s.grid.cell_id(0, 0);
         let cell1 = s.grid.cell_id(1, 1);
-        s.puzzle
-            .cell_clues
-            .push(CellClue::Rose { cell: cell0, symbol: 1 });
-        s.puzzle
-            .cell_clues
-            .push(CellClue::Rose { cell: cell1, symbol: 1 });
+        s.puzzle.cell_clues.push(CellClue::Rose {
+            cell: cell0,
+            symbol: 1,
+        });
+        s.puzzle.cell_clues.push(CellClue::Rose {
+            cell: cell1,
+            symbol: 1,
+        });
         assert_eq!(s.count_rose_symbols(), 2);
     }
 

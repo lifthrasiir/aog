@@ -73,7 +73,11 @@ impl Solver {
             3 => (-c, r),
             _ => unreachable!(),
         };
-        if flip { (nr, -nc) } else { (nr, nc) }
+        if flip {
+            (nr, -nc)
+        } else {
+            (nr, nc)
+        }
     }
 
     pub(crate) fn solve_match_2piece_coupled(&mut self) {
@@ -105,9 +109,7 @@ impl Solver {
         let (a1r, a1c) = (a1r as i32, a1c as i32);
 
         let n = self.grid.num_cells();
-        let existing_cells: Vec<CellId> = (0..n)
-            .filter(|&c| self.grid.cell_exists[c])
-            .collect();
+        let existing_cells: Vec<CellId> = (0..n).filter(|&c| self.grid.cell_exists[c]).collect();
 
         let mut pos_to_cell: HashMap<(i32, i32), CellId> = HashMap::new();
         for &cell in &existing_cells {
@@ -158,7 +160,7 @@ impl Solver {
                         let in_img = bwd[cell].is_some();
                         let in_dom = fwd[cell].is_some();
                         if !in_img && !in_dom {
-                                ok = false;
+                            ok = false;
                             break;
                         }
                         if !in_img {
@@ -235,14 +237,18 @@ impl Solver {
                     let remaining = target - init_size;
                     if remaining == 0 {
                         // piece1 already complete — verify connectivity + coverage
-                        let all_covered = existing_cells
-                            .iter()
-                            .all(|&c| in_p1[c] || in_p2[c]);
+                        let all_covered = existing_cells.iter().all(|&c| in_p1[c] || in_p2[c]);
                         if all_covered && Self::is_connected_set(&adj, &in_p1, &existing_cells) {
-                            let p1: Vec<CellId> =
-                                existing_cells.iter().filter(|&&c| in_p1[c]).copied().collect();
-                            let p2: Vec<CellId> =
-                                existing_cells.iter().filter(|&&c| in_p2[c]).copied().collect();
+                            let p1: Vec<CellId> = existing_cells
+                                .iter()
+                                .filter(|&&c| in_p1[c])
+                                .copied()
+                                .collect();
+                            let p2: Vec<CellId> = existing_cells
+                                .iter()
+                                .filter(|&&c| in_p2[c])
+                                .copied()
+                                .collect();
                             self.record_bipartite_solution(&p1, &p2);
                             if self.solution_count >= 2 {
                                 return;
@@ -251,10 +257,7 @@ impl Solver {
                         continue;
                     }
 
-                    eprintln!(
-                        "coupled: rot={} flip={} rem={}",
-                        rot, flip, remaining,
-                    );
+                    eprintln!("coupled: rot={} flip={} rem={}", rot, flip, remaining,);
 
                     self.node_count = 0;
                     self.coupled_dfs_v2(
@@ -280,10 +283,7 @@ impl Solver {
                 }
             }
         }
-        eprintln!(
-            "coupled: explored {} DFS nodes total",
-            total_nodes
-        );
+        eprintln!("coupled: explored {} DFS nodes total", total_nodes);
     }
 
     pub(crate) fn is_connected_set(
@@ -448,10 +448,10 @@ mod tests {
     fn is_connected_set_connected() {
         // Simple graph: 0-1-2-3 all connected
         let adj = vec![
-            vec![1],      // 0
-            vec![0, 2],   // 1
-            vec![1, 3],   // 2
-            vec![2],      // 3
+            vec![1],    // 0
+            vec![0, 2], // 1
+            vec![1, 3], // 2
+            vec![2],    // 3
         ];
         let in_set = vec![true, true, true, true];
         let existing = vec![0, 1, 2, 3];
@@ -462,10 +462,10 @@ mod tests {
     fn is_connected_set_disconnected() {
         // Graph: 0-1, 2-3 (two separate components)
         let adj = vec![
-            vec![1],   // 0
-            vec![0],   // 1
-            vec![3],   // 2
-            vec![2],   // 3
+            vec![1], // 0
+            vec![0], // 1
+            vec![3], // 2
+            vec![2], // 3
         ];
         let in_set = vec![true, true, true, true];
         let existing = vec![0, 1, 2, 3];

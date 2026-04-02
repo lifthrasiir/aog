@@ -166,7 +166,14 @@ pub fn enumerate_free_polyominoes(n: usize) -> Vec<Shape> {
         }
     }
 
-    poly_rec(n, &mut cells, &untried, &mut placed, &mut seen, &mut results);
+    poly_rec(
+        n,
+        &mut cells,
+        &untried,
+        &mut placed,
+        &mut seen,
+        &mut results,
+    );
     results.sort();
     results
 }

@@ -66,7 +66,7 @@ impl Solver {
 
         let mut num_comp = 0usize;
         // reuse comp_buf values as IDs by mapping them to 0..num_comp
-        // but we can just use a small array for mapping if we want to be super fast, 
+        // but we can just use a small array for mapping if we want to be super fast,
         // or just use the fact that comp_buf[c] is the representative cell.
         // Let's use a temporary mapping array to keep IDs contiguous.
         let mut id_map = vec![usize::MAX; n];
@@ -150,7 +150,9 @@ impl Solver {
                 let cannot_merge = if self.puzzle.rules.solitude {
                     self.curr_target_area[ci1].is_some() && self.curr_target_area[ci2].is_some()
                 } else {
-                    if let (Some(a1), Some(a2)) = (self.curr_target_area[ci1], self.curr_target_area[ci2]) {
+                    if let (Some(a1), Some(a2)) =
+                        (self.curr_target_area[ci1], self.curr_target_area[ci2])
+                    {
                         a1 != a2
                     } else {
                         false
@@ -197,7 +199,10 @@ impl Solver {
                         }
                     }
                 }
-            } else if self.eff_min_area > 1 && self.curr_comp_sz[ci] < self.eff_min_area && !self.can_grow_buf[ci] {
+            } else if self.eff_min_area > 1
+                && self.curr_comp_sz[ci] < self.eff_min_area
+                && !self.can_grow_buf[ci]
+            {
                 return Err(());
             }
         }
@@ -206,7 +211,9 @@ impl Solver {
         let mut compass_forced_cuts: Vec<EdgeId> = Vec::new();
 
         for clue in &self.puzzle.cell_clues {
-            let CellClue::Compass { cell, compass } = clue else { continue };
+            let CellClue::Compass { cell, compass } = clue else {
+                continue;
+            };
             if !self.grid.cell_exists[*cell] {
                 continue;
             }
@@ -277,8 +284,7 @@ impl Solver {
 
         // Pair-wise compass consistency within same component
         {
-            let mut compass_per_comp: Vec<Vec<(CellId, CompassData)>> =
-                vec![Vec::new(); num_comp];
+            let mut compass_per_comp: Vec<Vec<(CellId, CompassData)>> = vec![Vec::new(); num_comp];
             for cl in &self.puzzle.cell_clues {
                 if let CellClue::Compass { cell, compass } = cl {
                     if self.grid.cell_exists[*cell] {
@@ -298,58 +304,98 @@ impl Solver {
                         let (ra, cola) = self.grid.cell_pos(*ca);
                         let (rb, colb) = self.grid.cell_pos(*cb);
 
-                        if pa.n == Some(0) && rb < ra { return Err(()); }
-                        if pb.n == Some(0) && ra < rb { return Err(()); }
-                        if pa.s == Some(0) && rb > ra { return Err(()); }
-                        if pb.s == Some(0) && ra > rb { return Err(()); }
-                        if pa.e == Some(0) && colb > cola { return Err(()); }
-                        if pb.e == Some(0) && cola > colb { return Err(()); }
-                        if pa.w == Some(0) && colb < cola { return Err(()); }
-                        if pb.w == Some(0) && cola < colb { return Err(()); }
+                        if pa.n == Some(0) && rb < ra {
+                            return Err(());
+                        }
+                        if pb.n == Some(0) && ra < rb {
+                            return Err(());
+                        }
+                        if pa.s == Some(0) && rb > ra {
+                            return Err(());
+                        }
+                        if pb.s == Some(0) && ra > rb {
+                            return Err(());
+                        }
+                        if pa.e == Some(0) && colb > cola {
+                            return Err(());
+                        }
+                        if pb.e == Some(0) && cola > colb {
+                            return Err(());
+                        }
+                        if pa.w == Some(0) && colb < cola {
+                            return Err(());
+                        }
+                        if pb.w == Some(0) && cola < colb {
+                            return Err(());
+                        }
 
                         if rb < ra {
                             if let (Some(vb), Some(va)) = (pb.n, pa.n) {
-                                if vb >= va { return Err(()); }
+                                if vb >= va {
+                                    return Err(());
+                                }
                             }
                         } else if ra < rb {
                             if let (Some(va), Some(vb)) = (pa.n, pb.n) {
-                                if va >= vb { return Err(()); }
+                                if va >= vb {
+                                    return Err(());
+                                }
                             }
                         } else if let (Some(va), Some(vb)) = (pa.n, pb.n) {
-                            if va != vb { return Err(()); }
+                            if va != vb {
+                                return Err(());
+                            }
                         }
                         if rb > ra {
                             if let (Some(vb), Some(va)) = (pb.s, pa.s) {
-                                if vb >= va { return Err(()); }
+                                if vb >= va {
+                                    return Err(());
+                                }
                             }
                         } else if ra > rb {
                             if let (Some(va), Some(vb)) = (pa.s, pb.s) {
-                                if va >= vb { return Err(()); }
+                                if va >= vb {
+                                    return Err(());
+                                }
                             }
                         } else if let (Some(va), Some(vb)) = (pa.s, pb.s) {
-                            if va != vb { return Err(()); }
+                            if va != vb {
+                                return Err(());
+                            }
                         }
                         if colb > cola {
                             if let (Some(vb), Some(va)) = (pb.e, pa.e) {
-                                if vb >= va { return Err(()); }
+                                if vb >= va {
+                                    return Err(());
+                                }
                             }
                         } else if cola > colb {
                             if let (Some(va), Some(vb)) = (pa.e, pb.e) {
-                                if va >= vb { return Err(()); }
+                                if va >= vb {
+                                    return Err(());
+                                }
                             }
                         } else if let (Some(va), Some(vb)) = (pa.e, pb.e) {
-                            if va != vb { return Err(()); }
+                            if va != vb {
+                                return Err(());
+                            }
                         }
                         if colb < cola {
                             if let (Some(vb), Some(va)) = (pb.w, pa.w) {
-                                if vb >= va { return Err(()); }
+                                if vb >= va {
+                                    return Err(());
+                                }
                             }
                         } else if cola < colb {
                             if let (Some(va), Some(vb)) = (pa.w, pb.w) {
-                                if va >= vb { return Err(()); }
+                                if va >= vb {
+                                    return Err(());
+                                }
                             }
                         } else if let (Some(va), Some(vb)) = (pa.w, pb.w) {
-                            if va != vb { return Err(()); }
+                            if va != vb {
+                                return Err(());
+                            }
                         }
                     }
                 }
@@ -358,51 +404,82 @@ impl Solver {
 
         for &e in &compass_forced_cuts {
             if self.edges[e] == EdgeState::Unknown {
-                if !self.set_edge(e, EdgeState::Cut) { return Err(()); }
+                if !self.set_edge(e, EdgeState::Cut) {
+                    return Err(());
+                }
                 progress = true;
             }
         }
 
         if self.puzzle.rules.non_boxy || self.puzzle.rules.boxy {
             for ci in 0..num_comp {
-                if self.can_grow_buf[ci] { continue; }
-                let (mut min_r, mut max_r, mut min_c, mut max_c, mut cell_count) = (self.grid.rows, 0, self.grid.cols, 0, 0);
+                if self.can_grow_buf[ci] {
+                    continue;
+                }
+                let (mut min_r, mut max_r, mut min_c, mut max_c, mut cell_count) =
+                    (self.grid.rows, 0, self.grid.cols, 0, 0);
                 for c in 0..n {
                     if self.grid.cell_exists[c] && self.curr_comp_id[c] == ci {
                         let (r, col) = self.grid.cell_pos(c);
-                        min_r = min_r.min(r); max_r = max_r.max(r);
-                        min_c = min_c.min(col); max_c = max_c.max(col);
+                        min_r = min_r.min(r);
+                        max_r = max_r.max(r);
+                        min_c = min_c.min(col);
+                        max_c = max_c.max(col);
                         cell_count += 1;
                     }
                 }
-                if cell_count == 0 { continue; }
+                if cell_count == 0 {
+                    continue;
+                }
                 let is_rect = cell_count == (max_r - min_r + 1) * (max_c - min_c + 1);
-                if self.puzzle.rules.non_boxy && is_rect { return Err(()); }
-                if self.puzzle.rules.boxy && !is_rect { return Err(()); }
+                if self.puzzle.rules.non_boxy && is_rect {
+                    return Err(());
+                }
+                if self.puzzle.rules.boxy && !is_rect {
+                    return Err(());
+                }
             }
         }
 
         for clue in &self.puzzle.edge_clues {
-            let EdgeClueKind::Inequality { smaller_first } = clue.kind else { continue; };
+            let EdgeClueKind::Inequality { smaller_first } = clue.kind else {
+                continue;
+            };
             let e = clue.edge;
-            if self.edges[e] != EdgeState::Cut { continue; }
+            if self.edges[e] != EdgeState::Cut {
+                continue;
+            }
             let (c1, c2) = self.grid.edge_cells(e);
-            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] { continue; }
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                continue;
+            }
             let ci1 = self.curr_comp_id[c1];
             let ci2 = self.curr_comp_id[c2];
-            if ci1 == ci2 { continue; }
-            let (smaller_ci, larger_ci) = if smaller_first { (ci1, ci2) } else { (ci2, ci1) };
+            if ci1 == ci2 {
+                continue;
+            }
+            let (smaller_ci, larger_ci) = if smaller_first {
+                (ci1, ci2)
+            } else {
+                (ci2, ci1)
+            };
             let smaller_done = !self.can_grow_buf[smaller_ci];
             let larger_done = !self.can_grow_buf[larger_ci];
 
             if smaller_done && larger_done {
-                if self.curr_comp_sz[smaller_ci] >= self.curr_comp_sz[larger_ci] { return Err(()); }
+                if self.curr_comp_sz[smaller_ci] >= self.curr_comp_sz[larger_ci] {
+                    return Err(());
+                }
                 continue;
             }
-            if larger_done && self.curr_comp_sz[larger_ci] <= self.curr_comp_sz[smaller_ci] { return Err(()); }
+            if larger_done && self.curr_comp_sz[larger_ci] <= self.curr_comp_sz[smaller_ci] {
+                return Err(());
+            }
             if smaller_done {
                 let max_larger = self.curr_target_area[larger_ci].unwrap_or(self.eff_max_area);
-                if self.curr_comp_sz[smaller_ci] >= max_larger { return Err(()); }
+                if self.curr_comp_sz[smaller_ci] >= max_larger {
+                    return Err(());
+                }
             }
         }
 
@@ -654,12 +731,10 @@ mod tests {
         );
         // Add a palisade p0 clue at center cell (1,1)
         let center = s.grid.cell_id(1, 1);
-        s.puzzle
-            .cell_clues
-            .push(CellClue::Palisade {
-                cell: center,
-                kind: PalisadeKind::None,
-            });
+        s.puzzle.cell_clues.push(CellClue::Palisade {
+            cell: center,
+            kind: PalisadeKind::None,
+        });
 
         s.propagate_palisade();
 
@@ -687,12 +762,10 @@ mod tests {
 ",
         );
         let center = s.grid.cell_id(1, 1);
-        s.puzzle
-            .cell_clues
-            .push(CellClue::Palisade {
-                cell: center,
-                kind: PalisadeKind::All,
-            });
+        s.puzzle.cell_clues.push(CellClue::Palisade {
+            cell: center,
+            kind: PalisadeKind::All,
+        });
 
         s.propagate_palisade();
 
@@ -727,7 +800,10 @@ mod tests {
         }
 
         let result = s.propagate_bricky_loopy();
-        assert!(result.is_err(), "bricky: 4 cut edges at vertex should be contradiction");
+        assert!(
+            result.is_err(),
+            "bricky: 4 cut edges at vertex should be contradiction"
+        );
     }
 
     #[test]
@@ -749,8 +825,14 @@ mod tests {
         s.flood_fill_decided(s.grid.cell_id(0, 0));
 
         // Cell (0,0) and (0,1) should have same component id
-        assert_eq!(s.comp_buf[s.grid.cell_id(0, 0)], s.comp_buf[s.grid.cell_id(0, 1)]);
+        assert_eq!(
+            s.comp_buf[s.grid.cell_id(0, 0)],
+            s.comp_buf[s.grid.cell_id(0, 1)]
+        );
         // Cell (1,0) should be in a different component
-        assert_ne!(s.comp_buf[s.grid.cell_id(0, 0)], s.comp_buf[s.grid.cell_id(1, 0)]);
+        assert_ne!(
+            s.comp_buf[s.grid.cell_id(0, 0)],
+            s.comp_buf[s.grid.cell_id(1, 0)]
+        );
     }
 }

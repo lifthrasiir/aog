@@ -5,12 +5,7 @@ use crate::types::*;
 use std::collections::HashSet;
 
 impl Solver {
-    fn is_placement_valid(
-        &self,
-        cells: &[CellId],
-        shape_idx: usize,
-        rose_symbols: &[u8],
-    ) -> bool {
+    fn is_placement_valid(&self, cells: &[CellId], shape_idx: usize, rose_symbols: &[u8]) -> bool {
         // Internal edges must not be Cut or Pre-cut
         for i in 0..cells.len() {
             for j in (i + 1)..cells.len() {
@@ -60,7 +55,9 @@ impl Solver {
                     }
                 });
                 if has_sym {
-                    if found { return false; } // already found one
+                    if found {
+                        return false;
+                    } // already found one
                     found = true;
                 }
             }
@@ -112,15 +109,39 @@ impl Solver {
                             let (pr, pc) = self.grid.cell_pos(ocid);
                             let dr = pr as isize - cr;
                             let dc = pc as isize - cc;
-                            if dr < 0 { nc += 1; }
-                            if dr > 0 { sc += 1; }
-                            if dc > 0 { ec += 1; }
-                            if dc < 0 { wc += 1; }
+                            if dr < 0 {
+                                nc += 1;
+                            }
+                            if dr > 0 {
+                                sc += 1;
+                            }
+                            if dc > 0 {
+                                ec += 1;
+                            }
+                            if dc < 0 {
+                                wc += 1;
+                            }
                         }
-                        if let Some(v) = compass.e { if v != ec { return false; } }
-                        if let Some(v) = compass.w { if v != wc { return false; } }
-                        if let Some(v) = compass.s { if v != sc { return false; } }
-                        if let Some(v) = compass.n { if v != nc { return false; } }
+                        if let Some(v) = compass.e {
+                            if v != ec {
+                                return false;
+                            }
+                        }
+                        if let Some(v) = compass.w {
+                            if v != wc {
+                                return false;
+                            }
+                        }
+                        if let Some(v) = compass.s {
+                            if v != sc {
+                                return false;
+                            }
+                        }
+                        if let Some(v) = compass.n {
+                            if v != nc {
+                                return false;
+                            }
+                        }
                     }
                     CellClue::Rose { .. } => {}
                 }
@@ -177,11 +198,7 @@ impl Solver {
 
                         cells.sort();
 
-                        if self.is_placement_valid(
-                            &cells,
-                            si,
-                            &rose_symbols,
-                        ) {
+                        if self.is_placement_valid(&cells, si, &rose_symbols) {
                             placements.push(Piece {
                                 cells,
                                 area,
@@ -253,44 +270,48 @@ impl Solver {
                 dlx.add_row(i, &cols);
             }
 
-                let mut cell_to_piece = vec![usize::MAX; num_cells];
-                let mut solution = Vec::new();
-                dlx.search(&mut solution, &mut |sol_rows| {
-                    let snap = self.changed.len();
-                    let pieces: Vec<Piece> = sol_rows
-                        .iter()
-                        .enumerate()
-                        .map(|(pi, &idx)| {
-                            let p = placements[idx].1.clone();
-                            for &cid in &p.cells { cell_to_piece[cid] = pi; }
-                            p
-                        })
-                        .collect();
+            let mut cell_to_piece = vec![usize::MAX; num_cells];
+            let mut solution = Vec::new();
+            dlx.search(&mut solution, &mut |sol_rows| {
+                let snap = self.changed.len();
+                let pieces: Vec<Piece> = sol_rows
+                    .iter()
+                    .enumerate()
+                    .map(|(pi, &idx)| {
+                        let p = placements[idx].1.clone();
+                        for &cid in &p.cells {
+                            cell_to_piece[cid] = pi;
+                        }
+                        p
+                    })
+                    .collect();
 
-                    // Temporary set edges based on pieces for validation
-                    for piece in &pieces {
-                        for &cid in &piece.cells {
-                            for eid in grid.cell_edges(cid).into_iter().flatten() {
-                                let (c1, c2) = grid.edge_cells(eid);
-                                let other = if c1 == cid { c2 } else { c1 };
-                                if !grid.cell_exists[other] || cell_to_piece[other] != cell_to_piece[cid] {
-                                    self.set_edge(eid, EdgeState::Cut);
-                                } else {
-                                    self.set_edge(eid, EdgeState::Uncut);
-                                }
+                // Temporary set edges based on pieces for validation
+                for piece in &pieces {
+                    for &cid in &piece.cells {
+                        for eid in grid.cell_edges(cid).into_iter().flatten() {
+                            let (c1, c2) = grid.edge_cells(eid);
+                            let other = if c1 == cid { c2 } else { c1 };
+                            if !grid.cell_exists[other]
+                                || cell_to_piece[other] != cell_to_piece[cid]
+                            {
+                                self.set_edge(eid, EdgeState::Cut);
+                            } else {
+                                self.set_edge(eid, EdgeState::Uncut);
                             }
                         }
                     }
+                }
 
-                    if self.validate(&pieces) {
-                        self.solution_count += 1;
-                        self.best_pieces = pieces;
-                        self.best_edges = self.edges.clone();
-                        self.report_solution(self.solution_count);
-                    }
-                    self.restore(snap);
-                    self.solution_count < 2
-                });
+                if self.validate(&pieces) {
+                    self.solution_count += 1;
+                    self.best_pieces = pieces;
+                    self.best_edges = self.edges.clone();
+                    self.report_solution(self.solution_count);
+                }
+                self.restore(snap);
+                self.solution_count < 2
+            });
         } else {
             // Compute cell area bounds from inequality constraints (arc consistency)
             let n = self.grid.num_cells();
@@ -347,19 +368,15 @@ impl Solver {
             }
 
             // Check if incremental edge-clue checking is beneficial
-            let has_edge_constraints = self
-                .puzzle
-                .edge_clues
-                .iter()
-                .any(|cl| {
-                    matches!(
-                        cl.kind,
-                        EdgeClueKind::Inequality { .. }
-                            | EdgeClueKind::Delta
-                            | EdgeClueKind::Gemini
-                            | EdgeClueKind::Diff { .. }
-                    )
-                });
+            let has_edge_constraints = self.puzzle.edge_clues.iter().any(|cl| {
+                matches!(
+                    cl.kind,
+                    EdgeClueKind::Inequality { .. }
+                        | EdgeClueKind::Delta
+                        | EdgeClueKind::Gemini
+                        | EdgeClueKind::Diff { .. }
+                )
+            });
 
             if has_edge_constraints {
                 eprintln!(
@@ -442,7 +459,9 @@ impl Solver {
                         .enumerate()
                         .map(|(pi, &idx)| {
                             let p = placements[idx].clone();
-                            for &cid in &p.cells { cell_to_piece_final[cid] = pi; }
+                            for &cid in &p.cells {
+                                cell_to_piece_final[cid] = pi;
+                            }
                             p
                         })
                         .collect();
@@ -453,7 +472,9 @@ impl Solver {
                             for eid in grid.cell_edges(cid).into_iter().flatten() {
                                 let (c1, c2) = grid.edge_cells(eid);
                                 let other = if c1 == cid { c2 } else { c1 };
-                                if !grid.cell_exists[other] || cell_to_piece_final[other] != cell_to_piece_final[cid] {
+                                if !grid.cell_exists[other]
+                                    || cell_to_piece_final[other] != cell_to_piece_final[cid]
+                                {
                                     self.set_edge(eid, EdgeState::Cut);
                                 } else {
                                     self.set_edge(eid, EdgeState::Uncut);
@@ -481,7 +502,9 @@ impl Solver {
                         .enumerate()
                         .map(|(pi, &idx)| {
                             let p = placements[idx].clone();
-                            for &cid in &p.cells { cell_to_piece_simple[cid] = pi; }
+                            for &cid in &p.cells {
+                                cell_to_piece_simple[cid] = pi;
+                            }
                             p
                         })
                         .collect();
@@ -492,7 +515,9 @@ impl Solver {
                             for eid in grid.cell_edges(cid).into_iter().flatten() {
                                 let (c1, c2) = grid.edge_cells(eid);
                                 let other = if c1 == cid { c2 } else { c1 };
-                                if !grid.cell_exists[other] || cell_to_piece_simple[other] != cell_to_piece_simple[cid] {
+                                if !grid.cell_exists[other]
+                                    || cell_to_piece_simple[other] != cell_to_piece_simple[cid]
+                                {
                                     self.set_edge(eid, EdgeState::Cut);
                                 } else {
                                     self.set_edge(eid, EdgeState::Uncut);
