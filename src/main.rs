@@ -6,15 +6,33 @@ mod polyomino;
 mod solver;
 mod types;
 
+use std::fs::File;
 use std::io::BufReader;
+use std::process::ExitCode;
 
-fn main() {
-    let stdin = std::io::stdin();
-    let reader = BufReader::new(stdin.lock());
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 2 {
+        eprintln!("Usage: aog [filename]");
+        return ExitCode::from(1);
+    }
+
+    let reader: Box<dyn std::io::BufRead> = if args.len() == 2 {
+        let file = match File::open(&args[1]) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Failed to open '{}': {e}", args[1]);
+                return ExitCode::from(1);
+            }
+        };
+        Box::new(BufReader::new(file))
+    } else {
+        Box::new(BufReader::new(std::io::stdin().lock()))
+    };
     let mut p = parser::Parser::new();
     if let Err(e) = p.parse(reader) {
         eprintln!("Failed to parse input: {e}");
-        std::process::exit(1);
+        return ExitCode::from(1);
     }
 
     let mut s = solver::Solver::new(p.puzzle, p.grid);
@@ -31,6 +49,8 @@ fn main() {
     } else {
         println!("Multiple solutions found ({} shown above).", count);
     }
+
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
