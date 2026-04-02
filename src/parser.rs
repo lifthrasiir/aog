@@ -391,11 +391,60 @@ impl Parser {
                     .cell_clues
                     .push(CellClue::Palisade { cell: cid, kind });
             }
+        } else if content == "c" {
+            self.puzzle.cell_clues.push(CellClue::Compass {
+                cell: cid,
+                compass: CompassData::default(),
+            });
+        } else if Self::is_compact_compass(content) {
+            let mut compass = CompassData::default();
+            let bytes = content.as_bytes();
+            let mut pos = 0;
+            while pos < bytes.len() {
+                let dir = bytes[pos] as char;
+                pos += 1;
+                let start = pos;
+                while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+                    pos += 1;
+                }
+                let val: usize = content[start..pos].parse().unwrap_or(0);
+                match dir {
+                    'N' => compass.n = Some(val),
+                    'E' => compass.e = Some(val),
+                    'W' => compass.w = Some(val),
+                    'S' => compass.s = Some(val),
+                    _ => {}
+                }
+            }
+            self.puzzle
+                .cell_clues
+                .push(CellClue::Compass { cell: cid, compass });
         } else if let Some(shape) = polyomino::get_named_shape(content) {
             self.puzzle
                 .cell_clues
                 .push(CellClue::Polyomino { cell: cid, shape });
         }
+    }
+
+    fn is_compact_compass(s: &str) -> bool {
+        let bytes = s.as_bytes();
+        if bytes.is_empty() {
+            return false;
+        }
+        let mut pos = 0;
+        while pos < bytes.len() {
+            if !matches!(bytes[pos], b'N' | b'E' | b'W' | b'S') {
+                return false;
+            }
+            pos += 1;
+            if pos >= bytes.len() || !bytes[pos].is_ascii_digit() {
+                return false;
+            }
+            while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+                pos += 1;
+            }
+        }
+        true
     }
 
     /// Process a horizontal edge segment (text between two '+' tokens).
