@@ -1,6 +1,7 @@
 use super::Solver;
 use crate::polyomino::Rotation;
 use crate::types::*;
+use std::collections::{HashMap, VecDeque};
 
 impl Solver {
     pub(crate) fn propagate(&mut self) -> Result<bool, ()> {
@@ -11,6 +12,7 @@ impl Solver {
                 progress |= self.propagate_bricky_loopy()?;
             }
             progress |= self.propagate_area_bounds()?;
+            progress |= self.propagate_same_area_reachability()?;
             progress |= self.propagate_palisade_constraints()?;
             progress |= self.propagate_compass()?;
 
@@ -135,6 +137,7 @@ impl Solver {
         self.can_grow_buf.clear();
         self.can_grow_buf.resize(num_comp, false);
         let mut growth_edges = vec![Vec::new(); num_comp];
+        let mut same_area_forced_uncuts: Vec<EdgeId> = Vec::new();
 
         for e in 0..self.grid.num_edges() {
             if self.edges[e] != EdgeState::Unknown {
@@ -167,6 +170,21 @@ impl Solver {
                     continue;
                 }
 
+                // Same-area merge: when distinct area sum = total cells,
+                // all same-target components must eventually be in one piece.
+                if self.same_area_groups {
+                    if let (Some(a1), Some(a2)) =
+                        (self.curr_target_area[ci1], self.curr_target_area[ci2])
+                    {
+                        if a1 == a2 {
+                            same_area_forced_uncuts.push(e);
+                            self.can_grow_buf[ci1] = true;
+                            self.can_grow_buf[ci2] = true;
+                            continue;
+                        }
+                    }
+                }
+
                 self.can_grow_buf[ci1] = true;
                 self.can_grow_buf[ci2] = true;
                 growth_edges[ci1].push(e);
@@ -181,6 +199,16 @@ impl Solver {
                     }
                     progress = true;
                 }
+            }
+        }
+
+        // Apply same-area forced Uncuts (collected above to avoid stale component state)
+        for &e in &same_area_forced_uncuts {
+            if self.edges[e] == EdgeState::Unknown {
+                if !self.set_edge(e, EdgeState::Uncut) {
+                    return Err(());
+                }
+                progress = true;
             }
         }
 
@@ -707,6 +735,95 @@ impl Solver {
                 }
             }
         }
+    }
+
+    /// When same_area_groups is true, check that all anchors of each area value
+    /// are still potentially reachable from each other through available cells.
+    /// "Available" = not Cut-edge-separated from the group's components.
+    /// Returns Err if any group's anchors are disconnected.
+    pub(crate) fn propagate_same_area_reachability(&mut self) -> Result<bool, ()> {
+        if !self.same_area_groups {
+            return Ok(false);
+        }
+
+        // Group area clue cells by value
+        let mut area_anchors: HashMap<usize, Vec<CellId>> = HashMap::new();
+        for clue in &self.puzzle.cell_clues {
+            if let CellClue::Area { cell, value } = clue {
+                area_anchors.entry(*value).or_default().push(*cell);
+            }
+        }
+
+        let n = self.grid.num_cells();
+
+        for (&target, anchors) in &area_anchors {
+            if anchors.len() <= 1 {
+                continue;
+            }
+
+            // BFS from all cells in target-area components, traversing through
+            // non-Cut edges, only entering no-target or same-target components.
+            let mut visited = vec![false; n];
+            let mut queue = VecDeque::new();
+
+            for c in 0..n {
+                if !self.grid.cell_exists[c] {
+                    continue;
+                }
+                let ci = self.curr_comp_id[c];
+                if ci == usize::MAX {
+                    continue;
+                }
+                if self.curr_target_area[ci] == Some(target) {
+                    visited[c] = true;
+                    queue.push_back(c);
+                }
+            }
+
+            while let Some(cur) = queue.pop_front() {
+                for eid in self.grid.cell_edges(cur).into_iter().flatten() {
+                    if self.edges[eid] == EdgeState::Cut {
+                        continue;
+                    }
+                    let (c1, c2) = self.grid.edge_cells(eid);
+                    let other = if c1 == cur { c2 } else { c1 };
+                    if !self.grid.cell_exists[other] || visited[other] {
+                        continue;
+                    }
+                    let oci = self.curr_comp_id[other];
+                    if oci == usize::MAX {
+                        continue;
+                    }
+                    match self.curr_target_area[oci] {
+                        Some(t) if t == target => {
+                            visited[other] = true;
+                            queue.push_back(other);
+                        }
+                        None => {
+                            // No-target cell: can potentially join this group
+                            visited[other] = true;
+                            queue.push_back(other);
+                        }
+                        _ => {} // Different target: blocked
+                    }
+                }
+            }
+
+            // Check all anchors for this area value are reachable
+            for &anchor in anchors {
+                if !visited[anchor] {
+                    return Err(());
+                }
+            }
+
+            // If reachable set is smaller than target, force cuts on edges from
+            // reachable set boundary to different-target components to prevent
+            // the reachable set from shrinking further.
+            // (Currently just checking anchor reachability; size budget check
+            // would be imprecise due to shared no-target cells.)
+        }
+
+        Ok(false)
     }
 }
 

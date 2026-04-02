@@ -366,7 +366,7 @@ impl Parser {
             self.grid.cell_exists[cid] = false;
         } else if content == "_" {
             // empty cell — no clue
-        } else if content.len() == 1 && content.as_bytes()[0].is_ascii_digit() {
+        } else if !content.is_empty() && content.chars().all(|c| c.is_ascii_digit()) {
             self.puzzle.cell_clues.push(CellClue::Area {
                 cell: cid,
                 value: content.parse().unwrap(),
@@ -1008,6 +1008,25 @@ cell a1 poly
             panic!("expected Polyomino");
         };
         assert_eq!(shape.cells.len(), 4); // T tetromino via multiline
+    }
+
+    #[test]
+    fn multi_digit_area_clue() {
+        let p = parse_str(
+            "\
++---+---+
+|18 . _ |
++ . + . +
+| _ . _ |
++---+---+
+",
+        )
+        .unwrap();
+        assert!(p
+            .puzzle
+            .cell_clues
+            .iter()
+            .any(|cl| matches!(cl, CellClue::Area { value: 18, .. })));
     }
 
     #[test]

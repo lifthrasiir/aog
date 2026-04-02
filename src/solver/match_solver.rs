@@ -7,6 +7,12 @@ impl Solver {
     const MAX_ENUM_SIZE: usize = 10;
 
     pub(crate) fn solve_normal(&mut self) {
+        // When distinct area sum = total cells, use grouped area search
+        if self.same_area_groups {
+            self.solve_grouped_areas();
+            return;
+        }
+
         let total_clue_area: usize = self
             .puzzle
             .cell_clues

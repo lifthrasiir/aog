@@ -47,6 +47,9 @@ pub struct Solver {
     // Pre-calculated cell clue info
     pub(crate) cell_clues_indexed: Vec<Vec<usize>>, // indices into self.puzzle.cell_clues
     pub(crate) has_any_clue: Vec<bool>,
+    // Optimization: when sum of distinct area values equals total_cells,
+    // all cells with the same area number must be in the same piece.
+    pub(crate) same_area_groups: bool,
 }
 
 impl Solver {
@@ -90,6 +93,7 @@ impl Solver {
             auto_populated_bank: false,
             cell_clues_indexed,
             has_any_clue,
+            same_area_groups: false,
         }
     }
 
@@ -105,6 +109,31 @@ impl Solver {
         self.progress.reset();
         self.compute_area_bounds();
         self.total_cells = self.grid.total_existing_cells();
+
+        // Detect same-area-groups optimization:
+        // If sum of distinct area clue values == total cells, then every distinct
+        // area value corresponds to exactly one piece, and all cells with the same
+        // area number must be in the same connected piece.
+        {
+            use std::collections::HashSet;
+            let mut seen = HashSet::new();
+            let mut distinct_sum = 0usize;
+            for clue in &self.puzzle.cell_clues {
+                if let CellClue::Area { value, .. } = clue {
+                    if seen.insert(*value) {
+                        distinct_sum += *value;
+                    }
+                }
+            }
+            self.same_area_groups = distinct_sum == self.total_cells;
+            if self.same_area_groups {
+                eprintln!(
+                    "same-area-groups optimization: {} distinct areas sum to {} = total cells",
+                    seen.len(),
+                    distinct_sum
+                );
+            }
+        }
 
         // Initial unknown count
         self.curr_unknown = self

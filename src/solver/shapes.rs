@@ -333,6 +333,278 @@ impl Solver {
         }
         placements
     }
+
+    /// Solve when same_area_groups is true: each distinct area value maps to
+    /// exactly one piece. Uses recursive placement generation with lazy evaluation.
+    pub(crate) fn solve_grouped_areas(&mut self) {
+        // Group area clues by value
+        let mut area_groups: Vec<(usize, Vec<CellId>)> = Vec::new();
+        {
+            let mut map: std::collections::HashMap<usize, Vec<CellId>> = std::collections::HashMap::new();
+            for clue in &self.puzzle.cell_clues {
+                if let CellClue::Area { cell, value } = clue {
+                    map.entry(*value).or_default().push(*cell);
+                }
+            }
+            for (value, cells) in map {
+                area_groups.push((value, cells));
+            }
+        }
+        area_groups.sort_by_key(|(v, _)| *v);
+
+        // Collect all anchor cells as forbidden for placement generation
+        let all_anchors: HashSet<CellId> = area_groups.iter().flat_map(|(_, a)| a.iter().copied()).collect();
+
+        // Generate placements per group (ordered by constraint level = fewest first)
+        let n_groups = area_groups.len();
+        let mut group_placements: Vec<Vec<Vec<CellId>>> = Vec::with_capacity(n_groups);
+        for &(area, ref anchors) in &area_groups {
+            let forbidden = all_anchors.iter().filter(|c| !anchors.contains(c)).copied().collect();
+            let placements = self.generate_grouped_placements(anchors, area, &forbidden);
+            eprintln!("area {}: {} placements", area, placements.len());
+            group_placements.push(placements);
+        }
+
+        // Sort groups by placement count (most constrained first)
+        let mut order: Vec<usize> = (0..n_groups).collect();
+        order.sort_by_key(|&i| group_placements[i].len());
+
+        // Recursive backtracking: try each placement for the most constrained group,
+        // then the next, etc.
+        let mut used = vec![false; self.grid.num_cells()];
+        let mut solution = Vec::with_capacity(n_groups);
+
+        self.grouped_backtrack(
+            &order,
+            &group_placements,
+            &area_groups,
+            &mut used,
+            &mut solution,
+        );
+    }
+
+    fn grouped_backtrack(
+        &mut self,
+        order: &[usize],
+        all_placements: &[Vec<Vec<CellId>>],
+        area_groups: &[(usize, Vec<CellId>)],
+        used: &mut Vec<bool>,
+        solution: &mut Vec<(usize, Vec<CellId>)>, // (group_index, cells)
+    ) {
+        if self.solution_count >= 2 {
+            return;
+        }
+
+        let depth = solution.len();
+        if depth == order.len() {
+            // All groups placed. Set edges then verify solution.
+            self.report_progress();
+            let n = self.grid.num_cells();
+            let mut cell_to_piece = vec![usize::MAX; n];
+            for (pi, (_, cells)) in solution.iter().enumerate() {
+                for &c in cells {
+                    cell_to_piece[c] = pi;
+                }
+            }
+            // Set edges from cell partition (validate requires no Unknown edges)
+            for (_, ref cells) in solution.iter() {
+                for &cid in cells {
+                    for eid in self.grid.cell_edges(cid).into_iter().flatten() {
+                        let (c1, c2) = self.grid.edge_cells(eid);
+                        let other = if c1 == cid { c2 } else { c1 };
+                        if !self.grid.cell_exists[other]
+                            || cell_to_piece[other] != cell_to_piece[cid]
+                        {
+                            self.edges[eid] = EdgeState::Cut;
+                        } else {
+                            self.edges[eid] = EdgeState::Uncut;
+                        }
+                    }
+                }
+            }
+            let pieces = self.compute_pieces_from_groups(solution, area_groups);
+            if self.validate(&pieces) {
+                self.solution_count += 1;
+                self.best_pieces = pieces;
+                self.best_edges = self.edges.clone();
+                self.report_solution(self.solution_count);
+            }
+            return;
+        }
+
+        let gi = order[depth];
+        let placements = &all_placements[gi];
+        self.node_count += 1;
+
+        for cells in placements {
+            // Check cell availability
+            if cells.iter().any(|&c| used[c]) {
+                continue;
+            }
+
+            // Mark cells as used
+            for &c in cells {
+                used[c] = true;
+            }
+            solution.push((gi, cells.clone()));
+
+            self.grouped_backtrack(order, all_placements, area_groups, used, solution);
+
+            // Unmark
+            solution.pop();
+            for &c in cells {
+                used[c] = false;
+            }
+
+            if self.solution_count >= 2 {
+                return;
+            }
+        }
+    }
+
+    fn compute_pieces_from_groups(
+        &self,
+        solution: &[(usize, Vec<CellId>)],
+        area_groups: &[(usize, Vec<CellId>)],
+    ) -> Vec<Piece> {
+        let mut pieces = Vec::new();
+        for &(gi, ref cells) in solution {
+            let area = area_groups[gi].0;
+            let sc: Vec<(i32, i32)> = cells
+                .iter()
+                .map(|&c| {
+                    let (r, col) = self.grid.cell_pos(c);
+                    (r as i32, col as i32)
+                })
+                .collect();
+            pieces.push(Piece {
+                cells: cells.clone(),
+                area,
+                canonical: canonical(&polyomino::make_shape(&sc)),
+            });
+        }
+        pieces
+    }
+
+    /// Generate all connected subsets of `target_size` cells that include all `anchors`
+    /// and exclude `forbidden` cells.
+    fn generate_grouped_placements(
+        &self,
+        anchors: &[CellId],
+        target_size: usize,
+        forbidden: &HashSet<CellId>,
+    ) -> Vec<Vec<CellId>> {
+        let mut results = Vec::new();
+        if anchors.is_empty() || anchors.len() > target_size {
+            return results;
+        }
+
+        // Try each anchor as the BFS starting point
+        for (start_i, &start) in anchors.iter().enumerate() {
+            let others: Vec<CellId> = anchors
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != start_i)
+                .map(|(_, &a)| a)
+                .collect();
+
+            let mut current = vec![start];
+            let mut in_set: HashSet<CellId> = HashSet::from([start]);
+            let mut frontier: BTreeSet<CellId> = BTreeSet::new();
+
+            for eid in self.grid.cell_edges(start).into_iter().flatten() {
+                let (c1, c2) = self.grid.edge_cells(eid);
+                let other = if c1 == start { c2 } else { c1 };
+                if self.grid.cell_exists[other]
+                    && !in_set.contains(&other)
+                    && !forbidden.contains(&other)
+                {
+                    frontier.insert(other);
+                }
+            }
+
+            self.grouped_grow(
+                &mut current,
+                &mut in_set,
+                &mut frontier,
+                target_size,
+                forbidden,
+                &others,
+                &mut results,
+            );
+        }
+
+        // Deduplicate
+        results.sort();
+        results.dedup();
+        results
+    }
+
+    fn grouped_grow(
+        &self,
+        current: &mut Vec<CellId>,
+        in_set: &mut HashSet<CellId>,
+        frontier: &mut BTreeSet<CellId>,
+        target_size: usize,
+        forbidden: &HashSet<CellId>,
+        remaining_anchors: &[CellId],
+        results: &mut Vec<Vec<CellId>>,
+    ) {
+        let left = target_size - current.len();
+        if left == 0 {
+            if remaining_anchors.iter().all(|a| in_set.contains(a)) {
+                let mut sorted = current.clone();
+                sorted.sort();
+                results.push(sorted);
+            }
+            return;
+        }
+
+        if frontier.is_empty() {
+            return;
+        }
+
+        // Pruning: must be able to reach all remaining anchors
+        let unreached = remaining_anchors.iter().filter(|a| !in_set.contains(a)).count();
+        if unreached > 0 && left < unreached {
+            return;
+        }
+        // Note: we do NOT prune on `left > frontier.len()` because the frontier
+        // can grow as cells are added (each new cell may expose new neighbors).
+
+        let mut my_frontier = frontier.clone();
+        while let Some(&next) = my_frontier.iter().next() {
+            my_frontier.remove(&next);
+            frontier.remove(&next);
+
+            let mut added = Vec::new();
+            in_set.insert(next);
+            for eid in self.grid.cell_edges(next).into_iter().flatten() {
+                let (c1, c2) = self.grid.edge_cells(eid);
+                let other = if c1 == next { c2 } else { c1 };
+                if self.grid.cell_exists[other]
+                    && !in_set.contains(&other)
+                    && !forbidden.contains(&other)
+                    && !my_frontier.contains(&other)
+                {
+                    if frontier.insert(other) {
+                        added.push(other);
+                    }
+                }
+            }
+
+            current.push(next);
+            self.grouped_grow(
+                current, in_set, frontier, target_size, forbidden, remaining_anchors, results,
+            );
+            current.pop();
+
+            in_set.remove(&next);
+            for a in added {
+                frontier.remove(&a);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
