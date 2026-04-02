@@ -9,19 +9,11 @@ impl Solver {
             let mut progress = false;
 
             if self.puzzle.rules.bricky || self.puzzle.rules.loopy {
-                match self.propagate_bricky_loopy() {
-                    Ok(p) => progress |= p,
-                    Err(()) => return Err(()),
-                }
+                progress |= self.propagate_bricky_loopy()?;
             }
-            match self.propagate_area_bounds() {
-                Ok(p) => progress |= p,
-                Err(()) => return Err(()),
-            }
-            match self.propagate_palisade_constraints() {
-                Ok(p) => progress |= p,
-                Err(()) => return Err(()),
-            }
+            progress |= self.propagate_area_bounds()?;
+            progress |= self.propagate_palisade_constraints()?;
+            progress |= self.propagate_compass()?;
 
             if !progress {
                 return Ok(true);
@@ -205,6 +197,56 @@ impl Solver {
             }
         }
 
+        // Compass bounds: prune components that can't satisfy compass clues
+        for clue in &self.puzzle.cell_clues {
+            let CellClue::Compass { cell, compass } = clue else { continue };
+            if !self.grid.cell_exists[*cell] {
+                continue;
+            }
+            let ci = comp_id[*cell];
+            if ci == usize::MAX {
+                continue;
+            }
+            let (cr, cc) = self.grid.cell_pos(*cell);
+            let (cr_i, cc_i) = (cr as isize, cc as isize);
+
+            let mut counts = [0usize; 4]; // N, S, E, W
+            for c in 0..n {
+                if self.grid.cell_exists[c] && comp_id[c] == ci {
+                    let (pr, pc) = self.grid.cell_pos(c);
+                    let dr = pr as isize - cr_i;
+                    let dc = pc as isize - cc_i;
+                    if dr < 0 {
+                        counts[0] += 1;
+                    }
+                    if dr > 0 {
+                        counts[1] += 1;
+                    }
+                    if dc > 0 {
+                        counts[2] += 1;
+                    }
+                    if dc < 0 {
+                        counts[3] += 1;
+                    }
+                }
+            }
+
+            for &(val, idx) in &[
+                (compass.n, 0),
+                (compass.s, 1),
+                (compass.e, 2),
+                (compass.w, 3),
+            ] {
+                let Some(v) = val else { continue };
+                if counts[idx] > v {
+                    return Err(());
+                }
+                if !can_grow[ci] && counts[idx] < v {
+                    return Err(());
+                }
+            }
+        }
+
         // Non-boxy / boxy: check fully-formed components
         if self.puzzle.rules.non_boxy || self.puzzle.rules.boxy {
             for ci in 0..num_comp {
@@ -285,6 +327,80 @@ impl Solver {
                 if comp_sz[smaller_ci] >= max_larger {
                     return Err(());
                 }
+            }
+        }
+
+        Ok(progress)
+    }
+
+    pub(crate) fn propagate_compass(&mut self) -> Result<bool, ()> {
+        // Collect compass clues upfront to avoid borrow conflicts with set_edge
+        let entries: Vec<(CellId, CompassData)> = self
+            .puzzle
+            .cell_clues
+            .iter()
+            .filter_map(|cl| match cl {
+                CellClue::Compass { cell, compass } => {
+                    if self.grid.cell_exists[*cell] {
+                        Some((*cell, compass.clone()))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+
+        let mut progress = false;
+
+        for (cell, compass) in &entries {
+            let (r, c) = self.grid.cell_pos(*cell);
+
+            for &(dr, dc, val) in &[
+                (-1isize, 0, compass.n),
+                (0, 1, compass.e),
+                (1, 0, compass.s),
+                (0, -1, compass.w),
+            ] {
+                let Some(v) = val else { continue };
+
+                let nr = r as isize + dr;
+                let nc = c as isize + dc;
+                if nr < 0
+                    || nr >= self.grid.rows as isize
+                    || nc < 0
+                    || nc >= self.grid.cols as isize
+                {
+                    if v > 0 {
+                        return Err(());
+                    }
+                    continue;
+                }
+
+                let nid = self.grid.cell_id(nr as usize, nc as usize);
+                if !self.grid.cell_exists[nid] {
+                    if v > 0 {
+                        return Err(());
+                    }
+                    continue;
+                }
+
+                let Some(edge) = self.grid.edge_between(*cell, nid) else {
+                    continue;
+                };
+
+                if v == 0 {
+                    // No cells in this direction: direct edge must be Cut
+                    if self.edges[edge] == EdgeState::Unknown {
+                        if !self.set_edge(edge, EdgeState::Cut) {
+                            return Err(());
+                        }
+                        progress = true;
+                    } else if self.edges[edge] != EdgeState::Cut {
+                        return Err(());
+                    }
+                }
+                // v > 0: cells can join via detour, so no edge constraint
             }
         }
 

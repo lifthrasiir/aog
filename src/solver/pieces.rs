@@ -106,22 +106,23 @@ impl Solver {
                     }
                     CellClue::Compass { compass, .. } => {
                         let (cr, cc) = self.grid.cell_pos(cid);
-                        let mut ec = 0;
-                        let mut wc = 0;
-                        let mut sc = 0;
-                        let mut nc = 0;
+                        let (cr, cc) = (cr as isize, cc as isize);
+                        let (mut nc, mut sc, mut ec, mut wc) = (0, 0, 0, 0);
                         for &ocid in cells {
                             let (pr, pc) = self.grid.cell_pos(ocid);
-                            let dr = (pr as isize) - (cr as isize);
-                            let dc = (pc as isize) - (cc as isize);
-                            if dr == 0 && dc == 1 {
-                                ec += 1;
-                            } else if dr == 0 && dc == -1 {
-                                wc += 1;
-                            } else if dr == 1 && dc == 0 {
-                                sc += 1;
-                            } else if dr == -1 && dc == 0 {
+                            let dr = pr as isize - cr;
+                            let dc = pc as isize - cc;
+                            if dr < 0 {
                                 nc += 1;
+                            }
+                            if dr > 0 {
+                                sc += 1;
+                            }
+                            if dc > 0 {
+                                ec += 1;
+                            }
+                            if dc < 0 {
+                                wc += 1;
                             }
                         }
                         if let Some(v) = compass.e {

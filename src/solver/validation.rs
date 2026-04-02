@@ -224,23 +224,25 @@ impl Solver {
                 }
                 CellClue::Compass { cell, compass } => {
                     let (cr, cc) = self.grid.cell_pos(*cell);
-                    let count_dir = |(lr, lc): (isize, isize)| -> usize {
-                        piece
-                            .cells
-                            .iter()
-                            .filter(|&&c| {
-                                let (pr, pc) = self.grid.cell_pos(c);
-                                (pr as isize) - (cr as isize) == lr
-                                    && (pc as isize) - (cc as isize) == lc
-                            })
-                            .count()
-                    };
-                    let (ec, wc, sc, nc) = (
-                        count_dir((0, 1)),
-                        count_dir((0, -1)),
-                        count_dir((1, 0)),
-                        count_dir((-1, 0)),
-                    );
+                    let (cr, cc) = (cr as isize, cc as isize);
+                    let (mut nc, mut sc, mut ec, mut wc) = (0, 0, 0, 0);
+                    for &c in &piece.cells {
+                        let (pr, pc) = self.grid.cell_pos(c);
+                        let dr = pr as isize - cr;
+                        let dc = pc as isize - cc;
+                        if dr < 0 {
+                            nc += 1;
+                        }
+                        if dr > 0 {
+                            sc += 1;
+                        }
+                        if dc > 0 {
+                            ec += 1;
+                        }
+                        if dc < 0 {
+                            wc += 1;
+                        }
+                    }
                     if let Some(e) = compass.e {
                         if e != ec {
                             return false;
