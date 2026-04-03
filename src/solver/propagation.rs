@@ -678,20 +678,85 @@ impl Solver {
                     max_c[ci] = max_c[ci].max(col);
                 }
             }
+
+            // Collect edges to force Cut for non-boxy (to avoid rectangle formation)
+            let mut non_boxy_forced_cuts: Vec<EdgeId> = Vec::new();
+
             for ci in 0..num_comp {
-                if self.can_grow_buf[ci] {
-                    continue;
-                }
                 let cell_count = self.curr_comp_sz[ci];
                 if cell_count == 0 {
                     continue;
                 }
-                let is_rect = cell_count == (max_r[ci] - min_r[ci] + 1) * (max_c[ci] - min_c[ci] + 1);
-                if self.puzzle.rules.non_boxy && is_rect {
-                    return Err(());
+                let bbox_w = max_r[ci] - min_r[ci] + 1;
+                let bbox_h = max_c[ci] - min_c[ci] + 1;
+                let bbox_size = bbox_w * bbox_h;
+                let is_rect = cell_count == bbox_size;
+
+                if !self.can_grow_buf[ci] {
+                    // Sealed component: final check
+                    if self.puzzle.rules.non_boxy && is_rect {
+                        return Err(());
+                    }
+                    if self.puzzle.rules.boxy && !is_rect {
+                        return Err(());
+                    }
+                } else {
+                    // Growing component
+                    let max_possible = self.curr_target_area[ci].unwrap_or(self.eff_max_area);
+
+                    if self.puzzle.rules.boxy && cell_count < bbox_size && bbox_size > max_possible {
+                        // Has holes in bbox but can't grow large enough to fill them
+                        return Err(());
+                    }
+
+                    if self.puzzle.rules.non_boxy && cell_count < bbox_size {
+                        let holes = bbox_size - cell_count;
+                        if holes == 1 && max_possible >= bbox_size {
+                            // 1 hole left and component can grow to fill it →
+                            // must Cut all edges to the hole to prevent rectangle
+                            for &c in &comp_cells[ci] {
+                                let (r, col) = self.grid.cell_pos(c);
+                                // Check all 4 neighbors
+                                for (dr, dc) in [(-1isize, 0), (1, 0), (0, -1), (0, 1)] {
+                                    let nr = r as isize + dr;
+                                    let nc = col as isize + dc;
+                                    if nr < 0 || nr >= self.grid.rows as isize
+                                        || nc < 0 || nc >= self.grid.cols as isize {
+                                        continue;
+                                    }
+                                    let nid = self.grid.cell_id(nr as usize, nc as usize);
+                                    if !self.grid.cell_exists[nid] {
+                                        continue;
+                                    }
+                                    if self.curr_comp_id[nid] == ci {
+                                        continue; // same component
+                                    }
+                                    // Check if this cell is the hole (inside bbox)
+                                    let (hr, hc) = self.grid.cell_pos(nid);
+                                    if hr >= min_r[ci] && hr <= max_r[ci]
+                                        && hc >= min_c[ci] && hc <= max_c[ci] {
+                                        let Some(e) = self.grid.edge_between(c, nid) else {
+                                            continue;
+                                        };
+                                        if self.edges[e] == EdgeState::Unknown {
+                                            non_boxy_forced_cuts.push(e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                if self.puzzle.rules.boxy && !is_rect {
-                    return Err(());
+            }
+
+            // Apply non-boxy forced cuts
+            for &e in &non_boxy_forced_cuts {
+                if self.edges[e] == EdgeState::Unknown {
+                    let p = self.set_edge(e, EdgeState::Cut);
+                    if !p {
+                        return Err(());
+                    }
+                    progress = true;
                 }
             }
         }
