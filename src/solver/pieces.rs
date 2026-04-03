@@ -270,7 +270,7 @@ impl Solver {
                 dlx.add_row(i, &cols);
             }
 
-            let mut cell_to_piece = vec![usize::MAX; num_cells];
+            let mut cell_to_piece = vec![usize::MAX; self.grid.num_cells()];
             let mut solution = Vec::new();
             dlx.search(&mut solution, &mut |sol_rows| {
                 let snap = self.changed.len();
@@ -537,7 +537,7 @@ impl Solver {
                     self.solution_count < 2
                 });
             } else {
-                let mut cell_to_piece_simple = vec![usize::MAX; num_cells];
+                let mut cell_to_piece_simple = vec![usize::MAX; self.grid.num_cells()];
                 let mut solution = Vec::new();
                 dlx.search(&mut solution, &mut |sol_rows| {
                     let snap = self.changed.len();
