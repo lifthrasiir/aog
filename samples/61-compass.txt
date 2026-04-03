@@ -22,7 +22,7 @@
                        |    _   |
                        +--------+
 
-# solution:
+# unique solution (skip):
 #
 #                     +---+
 #                     | 1 |

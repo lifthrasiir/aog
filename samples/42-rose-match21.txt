@@ -21,7 +21,7 @@ match
                     | _ |
                     +---+
 
-# solution:
+# unique solution:
 # 
 #             +---+
 #             | 1 |
