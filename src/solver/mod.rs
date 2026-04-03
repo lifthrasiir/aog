@@ -57,6 +57,10 @@ pub struct Solver {
     pub(crate) cached_growth_edge_count: Vec<usize>,
     // Pre-extracted diff clues: (edge_id, value)
     pub(crate) diff_clues: Vec<(EdgeId, usize)>,
+    // All edge IDs with any clue (inequality, diff, gemini, delta) — always Cut
+    pub(crate) clue_cut_edges: Vec<EdgeId>,
+    // Vertices with watchtower clues (static, for edge selection heuristic)
+    pub(crate) watchtower_vertices: HashSet<VertexId>,
     // Bitset of rose window symbols present in the puzzle (bit i = symbol i exists)
     pub(crate) rose_bits_all: u8,
 }
@@ -84,6 +88,18 @@ impl Solver {
                     None
                 }
             })
+            .collect();
+
+        let clue_cut_edges: Vec<EdgeId> = puzzle
+            .edge_clues
+            .iter()
+            .map(|cl| cl.edge)
+            .collect();
+
+        let watchtower_vertices: HashSet<VertexId> = puzzle
+            .vertex_clues
+            .iter()
+            .map(|cl| cl.vertex)
             .collect();
 
         let mut rose_bits_all: u8 = 0;
@@ -127,6 +143,8 @@ impl Solver {
             cached_sealed_neighbor_sizes: None,
             cached_growth_edge_count: Vec::new(),
             diff_clues,
+            clue_cut_edges,
+            watchtower_vertices,
             rose_bits_all,
         }
     }
