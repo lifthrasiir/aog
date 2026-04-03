@@ -794,8 +794,11 @@ impl Solver {
             }
         }
 
-        // Mingle shape: adjacent finished components must have the same shape
-        if self.puzzle.rules.mingle_shape {
+        // Compute canonical shapes for sealed components (shared by mingle_shape & gemini)
+        let has_mingle = self.puzzle.rules.mingle_shape;
+        let has_gemini = self.puzzle.edge_clues.iter().any(|cl| matches!(cl.kind, EdgeClueKind::Gemini));
+
+        if has_mingle || has_gemini {
             let mut comp_shape: Vec<Option<Shape>> = vec![None; num_comp];
             for ci in 0..num_comp {
                 if self.can_grow_buf[ci] {
@@ -818,22 +821,101 @@ impl Solver {
                 comp_shape[ci] = Some(canonical(&polyomino::make_shape(&cells)));
             }
 
-            for e in 0..self.grid.num_edges() {
-                if self.edges[e] != EdgeState::Cut {
-                    continue;
+            // Mingle shape: adjacent finished components must have the same shape
+            if has_mingle {
+                for e in 0..self.grid.num_edges() {
+                    if self.edges[e] != EdgeState::Cut {
+                        continue;
+                    }
+                    let (c1, c2) = self.grid.edge_cells(e);
+                    if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                        continue;
+                    }
+                    let ci1 = self.curr_comp_id[c1];
+                    let ci2 = self.curr_comp_id[c2];
+                    if ci1 == ci2 {
+                        continue;
+                    }
+                    match (&comp_shape[ci1], &comp_shape[ci2]) {
+                        (Some(s1), Some(s2)) if s1 != s2 => return Err(()),
+                        _ => {}
+                    }
                 }
-                let (c1, c2) = self.grid.edge_cells(e);
-                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
-                    continue;
-                }
-                let ci1 = self.curr_comp_id[c1];
-                let ci2 = self.curr_comp_id[c2];
-                if ci1 == ci2 {
-                    continue;
-                }
-                match (&comp_shape[ci1], &comp_shape[ci2]) {
-                    (Some(s1), Some(s2)) if s1 != s2 => return Err(()),
-                    _ => {}
+            }
+
+            // Gemini edge clues: adjacent pieces must have the same canonical shape.
+            // When one side is sealed, propagate size constraints to the other side.
+            // When both sides are sealed, verify canonical shapes match.
+            if has_gemini {
+                // Track required sizes from gemini constraints to detect conflicts
+                // when a component is adjacent to multiple gemini edges.
+                let mut gemini_required_size: Vec<Option<usize>> = vec![None; num_comp];
+
+                for clue in &self.puzzle.edge_clues {
+                    if !matches!(clue.kind, EdgeClueKind::Gemini) {
+                        continue;
+                    }
+                    let e = clue.edge;
+                    if self.edges[e] != EdgeState::Cut {
+                        continue;
+                    }
+                    let (c1, c2) = self.grid.edge_cells(e);
+                    if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                        continue;
+                    }
+                    let ci1 = self.curr_comp_id[c1];
+                    let ci2 = self.curr_comp_id[c2];
+                    if ci1 == ci2 {
+                        continue;
+                    }
+
+                    let sealed1 = !self.can_grow_buf[ci1];
+                    let sealed2 = !self.can_grow_buf[ci2];
+
+                    // Both sealed: check canonical shapes match
+                    if sealed1 && sealed2 {
+                        match (&comp_shape[ci1], &comp_shape[ci2]) {
+                            (Some(s1), Some(s2)) if s1 != s2 => return Err(()),
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    // One side sealed: propagate size constraint to the other
+                    let (sealed_ci, other_ci) =
+                        if sealed1 { (ci1, ci2) } else { (ci2, ci1) };
+                    let sealed_sz = self.curr_comp_sz[sealed_ci];
+
+                    // Check for conflicting gemini size requirements
+                    if let Some(prev) = gemini_required_size[other_ci] {
+                        if prev != sealed_sz {
+                            return Err(());
+                        }
+                    }
+                    gemini_required_size[other_ci] = Some(sealed_sz);
+
+                    // If other side has a target area from clues, it must match
+                    if let Some(target) = self.curr_target_area[other_ci] {
+                        if target != sealed_sz {
+                            return Err(());
+                        }
+                        continue;
+                    }
+
+                    // No target on other side: check size compatibility.
+                    // Only return Err if the component CANNOT reach sealed_sz.
+                    // A component that has already exceeded sealed_sz can only
+                    // grow further, so it's a genuine contradiction.
+                    let other_sz = self.curr_comp_sz[other_ci];
+                    if other_sz > sealed_sz {
+                        return Err(());
+                    }
+                    // other_sz <= sealed_sz: no further action. We intentionally
+                    // do NOT force Cut on growth edges here — during initial
+                    // propagation, components may be sealed at sub-target sizes
+                    // (e.g., monominoes from pre-cut edges), and forcing adjacent
+                    // components to stay small would incorrectly cascade and
+                    // prevent valid growth toward shape bank requirements.
                 }
             }
         }
@@ -1365,6 +1447,160 @@ mod tests {
         assert_ne!(
             s.comp_buf[s.grid.cell_id(0, 0)],
             s.comp_buf[s.grid.cell_id(1, 0)]
+        );
+    }
+
+    // === Gemini propagation tests ===
+    // Uses plain grids (no 'g') and manually adds gemini clues for full control.
+
+    /// Helper: create a 2x2 solver with gemini clue on v_edge(0,0) between (0,0) and (0,1).
+    fn make_gemini_solver_2x2() -> Solver {
+        let mut s = make_solver(
+            "\
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+",
+        );
+        let ge = s.grid.v_edge(0, 0);
+        let _ = s.set_edge(ge, EdgeState::Cut);
+        s.puzzle.edge_clues.push(EdgeClue {
+            edge: ge,
+            kind: EdgeClueKind::Gemini,
+        });
+        s
+    }
+
+    /// Helper: create a 2x3 solver with gemini clues on specified v_edge columns.
+    fn make_gemini_solver_2x3(cols: &[usize]) -> Solver {
+        let mut s = make_solver(
+            "\
++---+---+---+
+| _ . _ . _ |
++ . + . + . +
+| _ . _ . _ |
++---+---+---+
+",
+        );
+        for &c in cols {
+            let ge = s.grid.v_edge(0, c);
+            let _ = s.set_edge(ge, EdgeState::Cut);
+            s.puzzle.edge_clues.push(EdgeClue {
+                edge: ge,
+                kind: EdgeClueKind::Gemini,
+            });
+        }
+        s
+    }
+
+    #[test]
+    fn gemini_both_sealed_same_shape_ok() {
+        // 2x2: gemini on v_edge(0,0) between (0,0) and (0,1).
+        // Both sides are monominoes (sealed, same shape) → OK.
+        let mut s = make_gemini_solver_2x2();
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        assert!(s.propagate_area_bounds().is_ok());
+    }
+
+    #[test]
+    fn gemini_both_sealed_different_shape_err() {
+        // 2x2: gemini on v_edge(0,0) between (0,0) and (0,1).
+        // Left: domino (0,0)+(1,0), Right: monomino (0,1). Different shapes → Err.
+        let mut s = make_gemini_solver_2x2();
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Uncut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "gemini: domino vs monomino should be contradiction"
+        );
+    }
+
+    #[test]
+    fn gemini_one_sealed_size_exceeds_other_err() {
+        // 2x2: gemini on v_edge(0,0). Left: sealed monomino. Right: growing domino (size 2).
+        // sealed_sz=1, other_sz=2 > 1 → Err.
+        let mut s = make_gemini_solver_2x2();
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Uncut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "gemini: sealed monomino (1) vs growing domino (2) should be contradiction"
+        );
+    }
+
+    #[test]
+    fn gemini_one_sealed_size_conflicts_target_err() {
+        // 2x2: gemini on v_edge(0,0). Left: sealed monomino (size 1).
+        // Right-top has area=3 clue → target 3 ≠ 1 → Err.
+        let mut s = make_gemini_solver_2x2();
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        let right_top = s.grid.cell_id(0, 1);
+        s.puzzle.cell_clues.push(CellClue::Area {
+            cell: right_top,
+            value: 3,
+        });
+        let nc = s.grid.num_cells();
+        s.cell_clues_indexed = vec![vec![]; nc];
+        for (i, clue) in s.puzzle.cell_clues.iter().enumerate() {
+            s.cell_clues_indexed[clue.cell()].push(i);
+        }
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "gemini: sealed size 1 vs target area 3 should be contradiction"
+        );
+    }
+
+    #[test]
+    fn gemini_sealed_same_size_no_force_cut() {
+        // 2x3: gemini on v_edge(0,0) between left-top and mid-top.
+        // Left-top sealed at 1. Mid-top at size 1 with growth edges.
+        // We intentionally do NOT force Cut (to avoid cascading issues
+        // when sealed components are at sub-target sizes).
+        let mut s = make_gemini_solver_2x3(&[0]);
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(0, 2), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 2), EdgeState::Cut);
+
+        assert!(s.propagate_area_bounds().is_ok());
+        // The growth edge should remain Unknown (not forced Cut)
+        assert_eq!(
+            s.edges[s.grid.h_edge(0, 1)],
+            EdgeState::Unknown,
+            "gemini: should not force Cut on growth edges for size-matched growing component"
+        );
+    }
+
+    #[test]
+    fn gemini_conflicting_sizes_from_two_edges_err() {
+        // 2x3: mid-top adjacent to two gemini edges with different sealed sizes.
+        // Left sealed at 1, right sealed at 2, mid-top at 1 → conflicting.
+        let mut s = make_gemini_solver_2x3(&[0, 1]);
+        // Left: monomino (sealed at 1)
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        // Right: domino (sealed at 2)
+        let _ = s.set_edge(s.grid.h_edge(0, 2), EdgeState::Uncut);
+        // Seal mid-top at 1: cut all its edges
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 1), EdgeState::Cut);
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "gemini: conflicting size requirements (1 vs 2) should be contradiction"
         );
     }
 }
