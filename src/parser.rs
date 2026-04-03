@@ -218,11 +218,20 @@ impl Parser {
 
             let tokens = Self::scan_cell_tokens(&line);
 
-            // Map token positions to grid line indices
-            let mut token_indices: Vec<usize> = tokens
-                .iter()
-                .filter_map(|tok| grid_line_cols.binary_search(&tok.col).ok())
-                .collect();
+            // Map token positions to grid line indices.
+            // Multi-char tokens (e.g. <0>) may start before the grid column;
+            // match if any byte within the token falls on a grid column.
+            let mut token_indices: Vec<usize> = Vec::new();
+            let mut token_at_line: Vec<Option<(usize, String)>> =
+                vec![None; grid_line_cols.len()];
+            for tok in &tokens {
+                if let Some(idx) =
+                    Self::match_token_to_grid_col(tok.col, tok.text.len(), &grid_line_cols)
+                {
+                    token_at_line[idx] = Some((tok.col, tok.text.clone()));
+                    token_indices.push(idx);
+                }
+            }
             token_indices.sort();
             token_indices.dedup();
 
@@ -232,14 +241,6 @@ impl Parser {
                 covered[idx] = true;
             }
 
-            // Build lookup: grid line index → token text (if any)
-            let mut token_at_line: Vec<Option<String>> = vec![None; grid_line_cols.len()];
-            for tok in &tokens {
-                if let Ok(idx) = grid_line_cols.binary_search(&tok.col) {
-                    token_at_line[idx] = Some(tok.text.clone());
-                }
-            }
-
             for c in 0..cols {
                 let cid = self.grid.cell_id(row, c);
                 if !covered[c] || !covered[c + 1] {
@@ -247,18 +248,18 @@ impl Parser {
                     continue;
                 }
 
-                let left_pos = grid_line_cols[c];
-                let right_pos = grid_line_cols[c + 1];
-
                 let both_explicit = token_at_line[c].is_some() && token_at_line[c + 1].is_some();
 
                 if both_explicit {
-                    // Account for multi-char left separators (e.g. <3>)
-                    let left_sep_len =
-                        token_at_line[c].as_deref().map(str::len).unwrap_or(1);
-                    let content_start = left_pos + left_sep_len;
-                    let content = if content_start < right_pos {
-                        line[content_start..right_pos].trim()
+                    // Use actual token byte positions for content extraction,
+                    // not grid column positions, because multi-char tokens
+                    // may start before the grid column they belong to.
+                    let (left_col, left_text) = token_at_line[c].as_ref().unwrap();
+                    let (right_col, _) = token_at_line[c + 1].as_ref().unwrap();
+                    let content_start = left_col + left_text.len();
+                    let content_end = *right_col;
+                    let content = if content_start < content_end {
+                        line[content_start..content_end].trim()
                     } else {
                         ""
                     };
@@ -266,7 +267,7 @@ impl Parser {
                 }
 
                 if c + 1 < cols {
-                    if let Some(ref text) = token_at_line[c + 1] {
+                    if let Some((_, ref text)) = token_at_line[c + 1] {
                         self.parse_v_separator(row, c, text);
                     }
                 }
@@ -395,6 +396,23 @@ impl Parser {
             }
         }
         tokens
+    }
+
+    /// Find the grid line column index whose byte position falls within a
+    /// token's byte range [tok_col, tok_col + tok_len).  Returns None when
+    /// no grid column overlaps the token.
+    fn match_token_to_grid_col(
+        tok_col: usize,
+        tok_len: usize,
+        grid_line_cols: &[usize],
+    ) -> Option<usize> {
+        let end = tok_col + tok_len;
+        let start_idx = grid_line_cols.partition_point(|&c| c < tok_col);
+        if start_idx < grid_line_cols.len() && grid_line_cols[start_idx] < end {
+            Some(start_idx)
+        } else {
+            None
+        }
     }
 
     /// Parse cell content string and register any clues.
