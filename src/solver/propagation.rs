@@ -859,8 +859,13 @@ impl Solver {
             .iter()
             .any(|cl| matches!(cl.kind, EdgeClueKind::Gemini));
         let has_mismatch = self.puzzle.rules.mismatch;
+        let has_delta = self
+            .puzzle
+            .edge_clues
+            .iter()
+            .any(|cl| matches!(cl.kind, EdgeClueKind::Delta));
 
-        if has_mingle || has_gemini || has_mismatch {
+        if has_mingle || has_gemini || has_mismatch || has_delta {
             let mut comp_shape: Vec<Option<Shape>> = vec![None; num_comp];
             for ci in 0..num_comp {
                 if self.can_grow_buf[ci] {
@@ -1021,6 +1026,34 @@ impl Solver {
                     // (e.g., monominoes from pre-cut edges), and forcing adjacent
                     // components to stay small would incorrectly cascade and
                     // prevent valid growth toward shape bank requirements.
+                }
+            }
+
+            // Delta edge clues: adjacent pieces must have different canonical shapes.
+            // When both sides are sealed, verify shapes differ.
+            if has_delta {
+                for clue in &self.puzzle.edge_clues {
+                    if !matches!(clue.kind, EdgeClueKind::Delta) {
+                        continue;
+                    }
+                    let e = clue.edge;
+                    if self.edges[e] != EdgeState::Cut {
+                        continue;
+                    }
+                    let (c1, c2) = self.grid.edge_cells(e);
+                    if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                        continue;
+                    }
+                    let ci1 = self.curr_comp_id[c1];
+                    let ci2 = self.curr_comp_id[c2];
+                    if ci1 == ci2 {
+                        continue;
+                    }
+
+                    match (&comp_shape[ci1], &comp_shape[ci2]) {
+                        (Some(s1), Some(s2)) if s1 == s2 => return Err(()),
+                        _ => {}
+                    }
                 }
             }
 
@@ -1958,6 +1991,53 @@ mod tests {
         assert!(
             s.propagate_area_bounds().is_err(),
             "mingle: conflicting size requirements (1 vs 2) should be contradiction"
+        );
+    }
+
+    // === Delta propagation tests ===
+
+    /// Helper: create a 2x2 solver with delta clue on v_edge(0,0).
+    fn make_delta_solver_2x2() -> Solver {
+        let mut s = make_solver(
+            "\
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+",
+        );
+        let de = s.grid.v_edge(0, 0);
+        let _ = s.set_edge(de, EdgeState::Cut);
+        s.puzzle.edge_clues.push(EdgeClue {
+            edge: de,
+            kind: EdgeClueKind::Delta,
+        });
+        s
+    }
+
+    #[test]
+    fn delta_both_sealed_different_shapes_ok() {
+        // Left: domino (0,0)+(1,0), Right: monomino (0,1). Different shapes → OK
+        let mut s = make_delta_solver_2x2();
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Uncut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        assert!(s.propagate_area_bounds().is_ok());
+    }
+
+    #[test]
+    fn delta_both_sealed_same_shape_err() {
+        // Both sides are monominoes (sealed, same shape) → Err
+        let mut s = make_delta_solver_2x2();
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "delta: same shape (monomino vs monomino) should be contradiction"
         );
     }
 
