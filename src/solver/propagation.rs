@@ -15,6 +15,7 @@ impl Solver {
             progress |= self.propagate_same_area_reachability()?;
             progress |= self.propagate_palisade_constraints()?;
             progress |= self.propagate_compass()?;
+            progress |= self.propagate_watchtower()?;
 
             if !progress {
                 return Ok(true);
@@ -966,6 +967,94 @@ impl Solver {
             progress = true;
         }
 
+        Ok(progress)
+    }
+
+    /// Propagate watchtower (vertex) clues.
+    ///
+    /// For an interior vertex with 4 surrounding cells forming a 2×2 block,
+    /// the 4 internal edges between those cells determine connectivity:
+    ///   k internal cut edges → max(1, k) distinct pieces at the vertex.
+    /// So value=v means exactly v of those 4 internal edges must be Cut.
+    pub(crate) fn propagate_watchtower(&mut self) -> Result<bool, ()> {
+        let mut progress = false;
+        // Collect constraints upfront to avoid borrow conflicts
+        let constraints: Vec<(usize, Vec<EdgeId>)> = self
+            .puzzle
+            .vertex_clues
+            .iter()
+            .filter_map(|clue| {
+                let (vi, vj) = self.grid.vertex_pos(clue.vertex);
+                if vi == 0 || vj == 0 {
+                    return None; // border vertex
+                }
+                let tl = self.grid.cell_id(vi - 1, vj - 1);
+                let tr = self.grid.cell_id(vi - 1, vj);
+                let bl = self.grid.cell_id(vi, vj - 1);
+                let br = self.grid.cell_id(vi, vj);
+                if !self.grid.cell_exists[tl] || !self.grid.cell_exists[tr]
+                    || !self.grid.cell_exists[bl] || !self.grid.cell_exists[br]
+                {
+                    return None;
+                }
+                // 4 internal edges of the 2×2 cell group
+                Some((
+                    clue.value,
+                    vec![
+                        self.grid.v_edge(vi - 1, vj - 1), // TL-TR
+                        self.grid.h_edge(vi - 1, vj - 1), // TL-BL
+                        self.grid.h_edge(vi - 1, vj),     // TR-BR
+                        self.grid.v_edge(vi, vj - 1),     // BL-BR
+                    ],
+                ))
+            })
+            .collect();
+
+        for (value, edge_ids) in constraints {
+            let mut n_cut = 0usize;
+            let mut unk = Vec::new();
+            for &eid in &edge_ids {
+                match self.edges[eid] {
+                    EdgeState::Cut => n_cut += 1,
+                    EdgeState::Unknown => unk.push(eid),
+                    EdgeState::Uncut => {}
+                }
+            }
+
+            if value == 1 {
+                if n_cut >= 2 {
+                    return Err(());
+                }
+                if n_cut == 1 && !unk.is_empty() {
+                    for eid in unk {
+                        if !self.set_edge(eid, EdgeState::Uncut) {
+                            return Err(());
+                        }
+                        progress = true;
+                    }
+                }
+            } else {
+                let needed = (value as usize).saturating_sub(n_cut);
+                if needed > unk.len() {
+                    return Err(());
+                }
+                if needed == 0 && !unk.is_empty() {
+                    for eid in unk {
+                        if !self.set_edge(eid, EdgeState::Uncut) {
+                            return Err(());
+                        }
+                        progress = true;
+                    }
+                } else if needed == unk.len() && !unk.is_empty() {
+                    for eid in unk {
+                        if !self.set_edge(eid, EdgeState::Cut) {
+                            return Err(());
+                        }
+                        progress = true;
+                    }
+                }
+            }
+        }
         Ok(progress)
     }
 

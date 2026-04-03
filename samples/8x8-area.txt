@@ -16,7 +16,7 @@
 | _ . _ . _ . _ . _ . _ . _ . _ |
 +---+---+---+---+---+---+---+---+
 
-# unique solution (requires release build, skip):
+# unique solution (takes ~40s, skip):
 #
 # +---+---+---+---+---+---+---+---+
 # | 1   1   1 | 2   2   2   2   2 |

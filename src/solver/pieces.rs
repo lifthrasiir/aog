@@ -364,7 +364,7 @@ impl Solver {
                 dlx.add_row(i, &cols);
             }
 
-            // Check if incremental edge-clue checking is beneficial
+            // Check if incremental checking is beneficial
             let has_edge_constraints = self.puzzle.edge_clues.iter().any(|cl| {
                 matches!(
                     cl.kind,
@@ -374,9 +374,34 @@ impl Solver {
                         | EdgeClueKind::Diff { .. }
                 )
             }) || self.puzzle.rules.size_separation
-                || self.puzzle.rules.mingle_shape;
+                || self.puzzle.rules.mingle_shape
+                || !self.puzzle.vertex_clues.is_empty();
 
-            if has_edge_constraints {
+            // Pre-compute watchtower vertex data for row_check
+            let watchtower_verts: Vec<([CellId; 4], usize)> = self
+                .puzzle
+                .vertex_clues
+                .iter()
+                .filter_map(|clue| {
+                    let (vi, vj) = self.grid.vertex_pos(clue.vertex);
+                    if vi == 0 || vj == 0 {
+                        return None;
+                    }
+                    let cells = [
+                        self.grid.cell_id(vi - 1, vj - 1),
+                        self.grid.cell_id(vi - 1, vj),
+                        self.grid.cell_id(vi, vj - 1),
+                        self.grid.cell_id(vi, vj),
+                    ];
+                    if cells.iter().all(|&c| self.grid.cell_exists[c]) {
+                        Some((cells, clue.value))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if has_edge_constraints || !watchtower_verts.is_empty() {
                 eprintln!(
                     "piece-based search with incremental edge-clue check ({} placements)",
                     placements.len()
@@ -485,6 +510,27 @@ impl Solver {
                             if placements[solution[p1]].canonical != placements[solution[p2]].canonical {
                                 return false;
                             }
+                        }
+                    }
+
+                    // Watchtower: distinct pieces at vertex must match target
+                    for (cells, value) in &watchtower_verts {
+                        let mut pieces: Vec<usize> = Vec::new();
+                        let mut all_assigned = true;
+                        for &c in cells {
+                            let p = cell_to_piece[c];
+                            if p == usize::MAX {
+                                all_assigned = false;
+                            } else if !pieces.contains(&p) {
+                                pieces.push(p);
+                            }
+                        }
+                        let distinct = pieces.len();
+                        if distinct > *value {
+                            return false;
+                        }
+                        if all_assigned && distinct != *value {
+                            return false;
                         }
                     }
 

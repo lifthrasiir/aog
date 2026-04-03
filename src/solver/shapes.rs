@@ -30,6 +30,16 @@ impl Solver {
         if !self.puzzle.rules.shape_bank.is_empty() {
             return;
         }
+        // Cap eff_max_area by the largest connected component via non-pre-cut edges.
+        // Any piece larger than this cannot exist without crossing a pre-cut edge.
+        let max_comp = self.max_non_precut_component_size();
+        if self.eff_max_area > max_comp {
+            eprintln!(
+                "eff_max_area capped: {} -> {} (max non-pre-cut component)",
+                self.eff_max_area, max_comp
+            );
+            self.eff_max_area = max_comp;
+        }
         if self.puzzle.rules.boxy {
             self.populate_boxy();
         } else if self.puzzle.rules.non_boxy {
@@ -72,6 +82,13 @@ impl Solver {
                 let h = size / w;
                 if w > h {
                     continue; // avoid rotation duplicates (only w <= h)
+                }
+                // Skip shapes that cannot be placed without crossing a pre-cut edge.
+                // Check both orientations since dedup only keeps w <= h.
+                if !self.has_valid_boxy_placement(w, h)
+                    && (w == h || !self.has_valid_boxy_placement(h, w))
+                {
+                    continue;
                 }
                 let cells: Vec<(i32, i32)> = (0..h as i32)
                     .flat_map(|r| (0..w as i32).map(move |c| (r, c)))
@@ -116,6 +133,81 @@ impl Solver {
             self.eff_min_area,
             max_size
         );
+    }
+
+    /// Largest connected component reachable via non-pre-cut edges.
+    fn max_non_precut_component_size(&self) -> usize {
+        let n = self.grid.num_cells();
+        let mut visited = vec![false; n];
+        let mut max_size = 0usize;
+        for start in 0..n {
+            if !self.grid.cell_exists[start] || visited[start] {
+                continue;
+            }
+            let mut size = 0usize;
+            visited[start] = true;
+            let mut stack = vec![start];
+            while let Some(cur) = stack.pop() {
+                size += 1;
+                for eid in self.grid.cell_edges(cur).into_iter().flatten() {
+                    if self.is_pre_cut[eid] {
+                        continue;
+                    }
+                    let (c1, c2) = self.grid.edge_cells(eid);
+                    let other = if c1 == cur { c2 } else { c1 };
+                    if self.grid.cell_exists[other] && !visited[other] {
+                        visited[other] = true;
+                        stack.push(other);
+                    }
+                }
+            }
+            max_size = max_size.max(size);
+        }
+        max_size
+    }
+
+    /// Check if a w*h rectangle can be placed somewhere on the grid
+    /// such that all cells exist and no internal edge is pre-cut.
+    fn has_valid_boxy_placement(&self, w: usize, h: usize) -> bool {
+        if w > self.grid.cols || h > self.grid.rows {
+            return false;
+        }
+        for sr in 0..=(self.grid.rows - h) {
+            for sc in 0..=(self.grid.cols - w) {
+                if self.is_rect_precut_free(sr, sc, w, h) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn is_rect_precut_free(&self, sr: usize, sc: usize, w: usize, h: usize) -> bool {
+        // Check all cells exist
+        for r in sr..sr + h {
+            for c in sc..sc + w {
+                if !self.grid.cell_exists[self.grid.cell_id(r, c)] {
+                    return false;
+                }
+            }
+        }
+        // Internal horizontal edges (between rows within the rectangle)
+        for r in sr..sr + h.saturating_sub(1) {
+            for c in sc..sc + w {
+                if self.is_pre_cut[self.grid.h_edge(r, c)] {
+                    return false;
+                }
+            }
+        }
+        // Internal vertical edges (between columns within the rectangle)
+        for r in sr..sr + h {
+            for c in sc..sc + w.saturating_sub(1) {
+                if self.is_pre_cut[self.grid.v_edge(r, c)] {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     pub(crate) fn prepare_shape_transforms(&mut self) {
