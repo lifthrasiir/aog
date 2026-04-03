@@ -57,6 +57,8 @@ pub struct Solver {
     pub(crate) cached_growth_edge_count: Vec<usize>,
     // Pre-extracted diff clues: (edge_id, value)
     pub(crate) diff_clues: Vec<(EdgeId, usize)>,
+    // Bitset of rose window symbols present in the puzzle (bit i = symbol i exists)
+    pub(crate) rose_bits_all: u8,
 }
 
 impl Solver {
@@ -83,6 +85,13 @@ impl Solver {
                 }
             })
             .collect();
+
+        let mut rose_bits_all: u8 = 0;
+        for cl in &puzzle.cell_clues {
+            if let CellClue::Rose { symbol, .. } = cl {
+                rose_bits_all |= 1 << *symbol;
+            }
+        }
 
         Self {
             puzzle,
@@ -118,6 +127,7 @@ impl Solver {
             cached_sealed_neighbor_sizes: None,
             cached_growth_edge_count: Vec::new(),
             diff_clues,
+            rose_bits_all,
         }
     }
 

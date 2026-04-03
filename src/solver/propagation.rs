@@ -95,13 +95,22 @@ impl Solver {
         self.curr_comp_sz.resize(num_comp, 0);
         let mut comp_cells: Vec<Vec<CellId>> = vec![Vec::new(); num_comp];
         let mut comp_clues = vec![Vec::new(); num_comp]; // This one is still a bit heavy, but clues are few
+        let mut comp_rose: Vec<u8> = vec![0u8; num_comp];
         for c in 0..n {
             if self.grid.cell_exists[c] {
                 let ci = self.curr_comp_id[c];
                 self.curr_comp_sz[ci] += 1;
                 comp_cells[ci].push(c);
                 for &clue_idx in &self.cell_clues_indexed[c] {
-                    comp_clues[ci].push(&self.puzzle.cell_clues[clue_idx]);
+                    let cl = &self.puzzle.cell_clues[clue_idx];
+                    if let CellClue::Rose { symbol, .. } = cl {
+                        let bit = 1u8 << symbol;
+                        if comp_rose[ci] & bit != 0 {
+                            return Err(()); // duplicate symbol in same component
+                        }
+                        comp_rose[ci] |= bit;
+                    }
+                    comp_clues[ci].push(cl);
                 }
             }
         }
@@ -212,6 +221,54 @@ impl Solver {
                     return Err(());
                 }
                 progress = true;
+            }
+        }
+
+        // === Rose window propagation ===
+        if self.rose_bits_all != 0 {
+            // 1) Sealed component missing a rose symbol → contradiction
+            for ci in 0..num_comp {
+                if self.can_grow_buf[ci] {
+                    continue;
+                }
+                let missing = self.rose_bits_all & !comp_rose[ci];
+                if missing != 0 {
+                    return Err(());
+                }
+            }
+
+            // 2) Growth edge forcing: collect forced Cut/Uncut edges
+            let mut rose_cut_set: HashSet<EdgeId> = HashSet::new();
+
+            for e in 0..self.grid.num_edges() {
+                if self.edges[e] != EdgeState::Unknown {
+                    continue;
+                }
+                let (c1, c2) = self.grid.edge_cells(e);
+                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                    continue;
+                }
+                let ci1 = self.curr_comp_id[c1];
+                let ci2 = self.curr_comp_id[c2];
+                if ci1 == ci2 {
+                    continue;
+                }
+
+                // If merging would introduce a duplicate symbol → force Cut.
+                // Check both: endpoint symbols and existing component symbols.
+                let would_dup = (comp_rose[ci1] & comp_rose[ci2]) != 0;
+                if would_dup {
+                    rose_cut_set.insert(e);
+                }
+            }
+
+            for &e in &rose_cut_set {
+                if self.edges[e] == EdgeState::Unknown {
+                    if !self.set_edge(e, EdgeState::Cut) {
+                        return Err(());
+                    }
+                    progress = true;
+                }
             }
         }
 
