@@ -24,10 +24,10 @@ Possible edge clues (at most one per edge; no duplicates of the same type):
 - delta (d): The pieces on either side must have different shapes after rotation and/or reflection.
 - gemini (g): The pieces on either side must have the same shape after rotation and/or reflection.
 - inequality (horizontal edges: ^ v, vertical edges: < >): The area of the piece on the indicated side must be less than (or greater than) the area of the piece on the other side.
-- difference (!0 !1 ...): The area difference between the two adjacent pieces must equal the specified number. It does not specify which piece is larger, and no piece can have zero area.
+- difference (<0> <1> ...; note no space in between): The area difference between the two adjacent pieces must equal the specified number. It does not specify which piece is larger, and no piece can have zero area.
 
 Possible vertex clues (at most one per vertex; no duplicates of the same type):
-- watchtower (w1~w4): Specifies the number of distinct pieces meeting at that vertex. "Distinct" means that if a piece touches the same vertex twice (e.g., due to a hole), it is still counted only once.
+- watchtower (! @ # $, corresponding to 1---4 dots): Specifies the number of distinct pieces meeting at that vertex. "Distinct" means that if a piece touches the same vertex twice (e.g., due to a hole), it is still counted only once.
 
 Due to the nature of the puzzle, combining multiple rules may produce special implications beyond what each rule states individually. For example, combining bricky and loopy (meaning a boundary vertex can touch at most 2 split edges) implies that every piece---except the largest one---must fit inside a hole of another piece. Identifying these rule interactions and determining exactly what constraints a given puzzle entails is the first step in solving it.
 

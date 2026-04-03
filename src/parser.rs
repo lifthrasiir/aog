@@ -37,7 +37,7 @@ fn set_precision(rules: &mut GlobalRules, val: usize) {
 
 struct CellToken {
     col: usize,
-    ch: char,
+    text: String,
 }
 
 impl Parser {
@@ -232,11 +232,11 @@ impl Parser {
                 covered[idx] = true;
             }
 
-            // Build lookup: grid line index → token char (if any)
-            let mut token_at_line: Vec<Option<char>> = vec![None; grid_line_cols.len()];
+            // Build lookup: grid line index → token text (if any)
+            let mut token_at_line: Vec<Option<String>> = vec![None; grid_line_cols.len()];
             for tok in &tokens {
                 if let Ok(idx) = grid_line_cols.binary_search(&tok.col) {
-                    token_at_line[idx] = Some(tok.ch);
+                    token_at_line[idx] = Some(tok.text.clone());
                 }
             }
 
@@ -253,8 +253,12 @@ impl Parser {
                 let both_explicit = token_at_line[c].is_some() && token_at_line[c + 1].is_some();
 
                 if both_explicit {
-                    let content = if left_pos + 1 < right_pos {
-                        line[left_pos + 1..right_pos].trim()
+                    // Account for multi-char left separators (e.g. <3>)
+                    let left_sep_len =
+                        token_at_line[c].as_deref().map(str::len).unwrap_or(1);
+                    let content_start = left_pos + left_sep_len;
+                    let content = if content_start < right_pos {
+                        line[content_start..right_pos].trim()
                     } else {
                         ""
                     };
@@ -262,8 +266,8 @@ impl Parser {
                 }
 
                 if c + 1 < cols {
-                    if let Some(ch) = token_at_line[c + 1] {
-                        self.parse_v_separator(row, c, ch);
+                    if let Some(ref text) = token_at_line[c + 1] {
+                        self.parse_v_separator(row, c, text);
                     }
                 }
             }
@@ -290,17 +294,27 @@ impl Parser {
 
             let r = edge_row_idx as isize - 1;
 
-            // Find + positions and map to grid line indices
+            // Find + and vertex-symbol positions, map to grid line indices.
+            // Watchtower symbols ! @ # $ at internal vertices create vertex clues.
             let mut plus_indices: Vec<usize> = Vec::new();
             for (col, ch) in line.char_indices() {
-                if ch == '+' {
+                if matches!(ch, '+' | '!' | '@' | '#' | '$') {
                     if let Ok(idx) = grid_line_cols.binary_search(&col) {
                         plus_indices.push(idx);
+                        if ch != '+' {
+                            let val: usize = match ch {
+                                '!' => 1, '@' => 2, '#' => 3, '$' => 4, _ => 0,
+                            };
+                            self.puzzle.vertex_clues.push(VertexClue {
+                                vertex: self.grid.vertex(edge_row_idx, idx),
+                                value: val,
+                            });
+                        }
                     }
                 }
             }
 
-            // Build lookup: grid line index → has_plus
+            // Build lookup: grid line index → has_plus (or vertex symbol)
             let mut has_plus: Vec<bool> = vec![false; grid_line_cols.len()];
             for &idx in &plus_indices {
                 has_plus[idx] = true;
@@ -330,7 +344,7 @@ impl Parser {
         Ok(())
     }
 
-    /// Collect `+` positions from all edge rows to define grid line columns.
+    /// Collect `+` (and watchtower-symbol) positions from all edge rows to define grid line columns.
     fn build_column_map(&self) -> Vec<usize> {
         let mut cols_set = std::collections::HashSet::new();
         for i in self.grid_start..=self.grid_end {
@@ -338,7 +352,7 @@ impl Parser {
             let t = line.trim_start();
             if t.starts_with('+') {
                 for (col, ch) in line.char_indices() {
-                    if ch == '+' {
+                    if matches!(ch, '+' | '!' | '@' | '#' | '$') {
                         cols_set.insert(col);
                     }
                 }
@@ -349,12 +363,35 @@ impl Parser {
         cols
     }
 
-    /// Scan a cell row for structural token positions and their characters.
+    /// Scan a cell row for structural token positions and their text.
+    /// Handles single-char separators (|, ., d, g, <, >, ^, v) plus
+    /// the multi-char difference notation <N> (e.g. <3>).
     fn scan_cell_tokens(line: &str) -> Vec<CellToken> {
+        let bytes = line.as_bytes();
         let mut tokens = Vec::new();
-        for (col, ch) in line.char_indices() {
-            if matches!(ch, '|' | '.' | 'd' | 'g' | '<' | '>' | '^' | 'v') {
-                tokens.push(CellToken { col, ch });
+        let mut i = 0;
+        while i < bytes.len() {
+            let ch = bytes[i] as char;
+            match ch {
+                '|' | '.' | 'd' | 'g' | '^' | 'v' | '>' => {
+                    tokens.push(CellToken { col: i, text: ch.to_string() });
+                    i += 1;
+                }
+                '<' => {
+                    // Check for <N> difference pattern: '<' digits '>'
+                    let mut j = i + 1;
+                    while j < bytes.len() && bytes[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    if j > i + 1 && j < bytes.len() && bytes[j] == b'>' {
+                        tokens.push(CellToken { col: i, text: line[i..=j].to_owned() });
+                        i = j + 1;
+                    } else {
+                        tokens.push(CellToken { col: i, text: '<'.to_string() });
+                        i += 1;
+                    }
+                }
+                _ => { i += 1; }
             }
         }
         tokens
@@ -449,15 +486,32 @@ impl Parser {
 
     /// Process a horizontal edge segment (text between two '+' tokens).
     fn process_edge_segment(&mut self, seg: &str, eid: EdgeId) {
-        if seg.is_empty() || seg.chars().all(|c| c == '-') {
+        // Single dot means "unknown edge" — no action
+        if seg == "." {
+            return;
+        }
+        // Empty or all-dashes means "cut edge"
+        if seg.is_empty() || seg.bytes().all(|b| b == b'-') {
             self.pre_cut_edges.push(eid);
-        } else if seg == "." {
-            // unknown — no action
-        } else if seg.len() == 3 && seg.starts_with('-') && seg.ends_with('-') {
-            let clue_char = seg.as_bytes()[1] as char;
+            return;
+        }
+        // Strip surrounding dashes to get the inner symbol
+        let inner = seg.trim_matches('-');
+        if inner.len() == 1 {
+            let clue_char = inner.as_bytes()[0] as char;
             self.pre_cut_edges.push(eid);
             if let Some(kind) = Self::edge_char_to_kind(clue_char) {
                 self.puzzle.edge_clues.push(EdgeClue { edge: eid, kind });
+            }
+        } else if inner.starts_with('<') && inner.ends_with('>') {
+            // Difference clue: <N>
+            let num_str = &inner[1..inner.len() - 1];
+            if let Ok(val) = num_str.parse::<usize>() {
+                self.pre_cut_edges.push(eid);
+                self.puzzle.edge_clues.push(EdgeClue {
+                    edge: eid,
+                    kind: EdgeClueKind::Diff { value: val },
+                });
             }
         }
     }
@@ -476,17 +530,40 @@ impl Parser {
         })
     }
 
-    fn parse_v_separator(&mut self, row: usize, col: usize, sep: char) {
-        if sep == '.' {
+    fn parse_v_separator(&mut self, row: usize, col: usize, sep: &str) {
+        if sep == "." {
             return;
         }
         let eid = self.grid.v_edge(row, col);
         self.pre_cut_edges.push(eid);
 
-        if sep != ' ' {
-            if let Some(kind) = Self::edge_char_to_kind(sep) {
-                self.puzzle.edge_clues.push(EdgeClue { edge: eid, kind });
+        if sep != " " {
+            if sep.len() == 1 {
+                let ch = sep.as_bytes()[0] as char;
+                if let Some(kind) = Self::edge_char_to_kind(ch) {
+                    self.puzzle.edge_clues.push(EdgeClue { edge: eid, kind });
+                }
+            } else if sep.starts_with('<') && sep.ends_with('>') {
+                // Difference clue: <N>
+                let inner = &sep[1..sep.len() - 1];
+                if let Ok(val) = inner.parse::<usize>() {
+                    self.puzzle.edge_clues.push(EdgeClue {
+                        edge: eid,
+                        kind: EdgeClueKind::Diff { value: val },
+                    });
+                }
             }
+        }
+    }
+
+    /// Parse a watchtower value: accepts symbols ! @ # $ (w1–w4) or bare digits.
+    fn parse_vertex_value(s: &str) -> usize {
+        match s {
+            "!" => 1,
+            "@" => 2,
+            "#" => 3,
+            "$" => 4,
+            _ => s.parse().unwrap_or(0),
         }
     }
 
@@ -520,14 +597,15 @@ impl Parser {
             let cmd = parts[0];
 
             if cmd == "vertex" {
-                let rest = parts.get(1).unwrap_or(&"");
-                let rparts: Vec<&str> = rest.split_whitespace().take(2).collect();
-                if rparts.len() >= 2 {
-                    let addr = rparts[0];
-                    let val: usize = rparts[1].parse().unwrap_or(0);
+                // Parse from the raw (unstripped) line so that '#' (watchtower w3)
+                // is not consumed by the comment stripper.
+                let raw_parts: Vec<&str> = self.lines[i].split_whitespace().collect();
+                if raw_parts.len() >= 3 {
+                    let addr = raw_parts[1];
+                    let val = Self::parse_vertex_value(raw_parts[2]);
                     let r = (addr.as_bytes()[0] - b'a') as usize;
                     let c: usize = addr[1..].parse().unwrap_or(1) - 1;
-                    if r <= self.grid.rows && c <= self.grid.cols {
+                    if val > 0 && r <= self.grid.rows && c <= self.grid.cols {
                         self.puzzle.vertex_clues.push(VertexClue {
                             vertex: self.grid.vertex(r, c),
                             value: val,
@@ -650,8 +728,12 @@ impl Parser {
                             smaller_first: false,
                         }),
                         _ => {
-                            if let Some(val_str) = ctype.strip_prefix('!') {
-                                if let Ok(val) = val_str.parse() {
+                            // Difference clue: <N>  (e.g. <3>)
+                            if let Some(inner) = ctype
+                                .strip_prefix('<')
+                                .and_then(|s| s.strip_suffix('>'))
+                            {
+                                if let Ok(val) = inner.parse() {
                                     self.puzzle.edge_clues.push(EdgeClue {
                                         edge: eid,
                                         kind: EdgeClueKind::Diff { value: val },
