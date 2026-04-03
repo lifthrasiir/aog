@@ -92,11 +92,13 @@ impl Solver {
 
         self.curr_comp_sz.clear();
         self.curr_comp_sz.resize(num_comp, 0);
+        let mut comp_cells: Vec<Vec<CellId>> = vec![Vec::new(); num_comp];
         let mut comp_clues = vec![Vec::new(); num_comp]; // This one is still a bit heavy, but clues are few
         for c in 0..n {
             if self.grid.cell_exists[c] {
                 let ci = self.curr_comp_id[c];
                 self.curr_comp_sz[ci] += 1;
+                comp_cells[ci].push(c);
                 for &clue_idx in &self.cell_clues_indexed[c] {
                     comp_clues[ci].push(&self.puzzle.cell_clues[clue_idx]);
                 }
@@ -421,23 +423,21 @@ impl Solver {
             let (cr_i, cc_i) = (cr as isize, cc as isize);
 
             let mut counts = [0usize; 4]; // N, S, E, W
-            for c in 0..n {
-                if self.grid.cell_exists[c] && self.curr_comp_id[c] == ci {
-                    let (pr, pc) = self.grid.cell_pos(c);
-                    let dr = pr as isize - cr_i;
-                    let dc = pc as isize - cc_i;
-                    if dr < 0 {
-                        counts[0] += 1;
-                    }
-                    if dr > 0 {
-                        counts[1] += 1;
-                    }
-                    if dc > 0 {
-                        counts[2] += 1;
-                    }
-                    if dc < 0 {
-                        counts[3] += 1;
-                    }
+            for &c in &comp_cells[ci] {
+                let (pr, pc) = self.grid.cell_pos(c);
+                let dr = pr as isize - cr_i;
+                let dc = pc as isize - cc_i;
+                if dr < 0 {
+                    counts[0] += 1;
+                }
+                if dr > 0 {
+                    counts[1] += 1;
+                }
+                if dc > 0 {
+                    counts[2] += 1;
+                }
+                if dc < 0 {
+                    counts[3] += 1;
                 }
             }
 
@@ -608,26 +608,27 @@ impl Solver {
         }
 
         if self.puzzle.rules.non_boxy || self.puzzle.rules.boxy {
+            // Single O(N) pass to compute bounding boxes for all components
+            let (mut min_r, mut max_r, mut min_c, mut max_c) =
+                (vec![self.grid.rows; num_comp], vec![0; num_comp], vec![self.grid.cols; num_comp], vec![0; num_comp]);
+            for ci in 0..num_comp {
+                for &c in &comp_cells[ci] {
+                    let (r, col) = self.grid.cell_pos(c);
+                    min_r[ci] = min_r[ci].min(r);
+                    max_r[ci] = max_r[ci].max(r);
+                    min_c[ci] = min_c[ci].min(col);
+                    max_c[ci] = max_c[ci].max(col);
+                }
+            }
             for ci in 0..num_comp {
                 if self.can_grow_buf[ci] {
                     continue;
                 }
-                let (mut min_r, mut max_r, mut min_c, mut max_c, mut cell_count) =
-                    (self.grid.rows, 0, self.grid.cols, 0, 0);
-                for c in 0..n {
-                    if self.grid.cell_exists[c] && self.curr_comp_id[c] == ci {
-                        let (r, col) = self.grid.cell_pos(c);
-                        min_r = min_r.min(r);
-                        max_r = max_r.max(r);
-                        min_c = min_c.min(col);
-                        max_c = max_c.max(col);
-                        cell_count += 1;
-                    }
-                }
+                let cell_count = self.curr_comp_sz[ci];
                 if cell_count == 0 {
                     continue;
                 }
-                let is_rect = cell_count == (max_r - min_r + 1) * (max_c - min_c + 1);
+                let is_rect = cell_count == (max_r[ci] - min_r[ci] + 1) * (max_c[ci] - min_c[ci] + 1);
                 if self.puzzle.rules.non_boxy && is_rect {
                     return Err(());
                 }
@@ -672,7 +673,21 @@ impl Solver {
                 return Err(());
             }
             if smaller_done {
-                let max_larger = self.curr_target_area[larger_ci].unwrap_or(self.eff_max_area);
+                // Component-wise max: use actual growth potential instead of global eff_max_area
+                let max_larger = self.curr_target_area[larger_ci].unwrap_or_else(|| {
+                    // Sum unique adjacent component sizes through remaining Unknown edges
+                    let mut adj_sz: HashSet<usize> = HashSet::new();
+                    for &ge in &growth_edges[larger_ci] {
+                        if self.edges[ge] != EdgeState::Unknown {
+                            continue;
+                        }
+                        let (gc1, gc2) = self.grid.edge_cells(ge);
+                        let other_ci =
+                            if self.curr_comp_id[gc1] == larger_ci { self.curr_comp_id[gc2] } else { self.curr_comp_id[gc1] };
+                        adj_sz.insert(self.curr_comp_sz[other_ci]);
+                    }
+                    (self.curr_comp_sz[larger_ci] + adj_sz.iter().sum::<usize>()).min(self.eff_max_area)
+                });
                 if self.curr_comp_sz[smaller_ci] >= max_larger {
                     return Err(());
                 }
@@ -717,9 +732,9 @@ impl Solver {
                 if !at_limit {
                     continue;
                 }
-                let cells: Vec<(i32, i32)> = (0..n)
-                    .filter(|&c| self.grid.cell_exists[c] && self.curr_comp_id[c] == ci)
-                    .map(|c| {
+                let cells: Vec<(i32, i32)> = comp_cells[ci]
+                    .iter()
+                    .map(|&c| {
                         let (r, col) = self.grid.cell_pos(c);
                         (r as i32, col as i32)
                     })
