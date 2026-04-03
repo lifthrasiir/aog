@@ -212,6 +212,12 @@ impl Solver {
             n_cut + n_uncut + n_unknown
         );
 
+        // Dump shape bank
+        eprintln!("shape bank: {} shapes", self.puzzle.rules.shape_bank.len());
+        for (i, s) in self.puzzle.rules.shape_bank.iter().enumerate() {
+            eprintln!("  shape {}: {} cells", i, s.cells.len());
+        }
+
         // Dump grid structure
         eprintln!("grid: rows={}, cols={}", self.grid.rows, self.grid.cols);
         for r in 0..self.grid.rows {

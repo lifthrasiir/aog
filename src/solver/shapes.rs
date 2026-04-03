@@ -15,10 +15,16 @@ impl Solver {
         if let Some(m) = r.maximum {
             hi = hi.min(m);
         }
+        let mut bank_min = usize::MAX;
+        let mut bank_max = 0usize;
         for s in &r.shape_bank {
             let sz = s.cells.len();
-            lo = lo.max(sz);
-            hi = hi.min(sz);
+            bank_min = bank_min.min(sz);
+            bank_max = bank_max.max(sz);
+        }
+        if bank_max > 0 {
+            lo = lo.max(bank_min);
+            hi = hi.min(bank_max);
         }
         self.eff_min_area = lo;
         self.eff_max_area = hi;

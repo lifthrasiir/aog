@@ -49,11 +49,8 @@ impl Parser {
                 line.pop();
             }
             // Preserve leading whitespace (needed for column-position-based parsing)
-            // but skip truly blank lines.
-            let trimmed_end = line.trim_end();
-            if !trimmed_end.trim().is_empty() {
-                lines.push(trimmed_end.to_owned());
-            }
+            // and also preserve blank lines (needed for shape bank separators).
+            lines.push(line.trim_end().to_owned());
         }
         self.lines = lines;
         if self.lines.is_empty() {
@@ -157,7 +154,6 @@ impl Parser {
                     eprintln!("Unknown shape: {}", name);
                 }
             }
-            return;
         }
 
         *idx += 1;
@@ -181,6 +177,8 @@ impl Parser {
                     .rules
                     .shape_bank
                     .push(polyomino::parse_shape(&shape_lines));
+            } else {
+                break;
             }
         }
         *idx -= 1;
