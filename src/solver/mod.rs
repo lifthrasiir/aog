@@ -17,6 +17,8 @@ pub struct Solver {
     pub(crate) grid: Grid,
     pub(crate) edges: Vec<EdgeState>,
     pub(crate) solution_count: usize,
+    pub(crate) first_pieces: Vec<Piece>,
+    pub(crate) first_edges: Vec<EdgeState>,
     pub(crate) best_pieces: Vec<Piece>,
     pub(crate) best_edges: Vec<EdgeState>,
     pub(crate) changed: Vec<(EdgeId, EdgeState)>,
@@ -73,6 +75,8 @@ impl Solver {
             grid,
             edges: vec![EdgeState::Unknown; n],
             solution_count: 0,
+            first_pieces: Vec::new(),
+            first_edges: Vec::new(),
             best_pieces: Vec::new(),
             best_edges: Vec::new(),
             changed: Vec::new(),
@@ -244,6 +248,18 @@ impl Solver {
         }
     }
 
+    /// Record a solution. Saves the first solution to first_*, and always updates best_*.
+    pub(crate) fn save_solution(&mut self, pieces: Vec<Piece>) {
+        if self.solution_count == 0 {
+            self.first_pieces = pieces.clone();
+            self.first_edges = self.edges.clone();
+        }
+        self.solution_count += 1;
+        self.best_pieces = pieces;
+        self.best_edges = self.edges.clone();
+        self.report_solution(self.solution_count);
+    }
+
     #[cfg(test)]
     pub(crate) fn get_best_pieces(&self) -> &[Piece] {
         &self.best_pieces
@@ -251,6 +267,14 @@ impl Solver {
     #[cfg(test)]
     pub(crate) fn get_best_edges(&self) -> &[EdgeState] {
         &self.best_edges
+    }
+    #[cfg(test)]
+    pub(crate) fn get_first_pieces(&self) -> &[Piece] {
+        &self.first_pieces
+    }
+    #[cfg(test)]
+    pub(crate) fn get_first_edges(&self) -> &[EdgeState] {
+        &self.first_edges
     }
     #[cfg(test)]
     pub(crate) fn get_grid(&self) -> &Grid {

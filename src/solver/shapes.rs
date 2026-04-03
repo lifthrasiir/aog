@@ -40,24 +40,18 @@ impl Solver {
         self.auto_populated_bank = !self.puzzle.rules.shape_bank.is_empty();
     }
 
-    /// General: only for tight (single-size) puzzles with max <= 5.
+    /// General: free polyominoes for all sizes in [eff_min_area, eff_max_area], capped at 5.
     fn populate_general(&mut self) {
         if self.eff_max_area > 5 || self.eff_max_area < 1 {
             return;
         }
-        let target = self.eff_max_area;
-        let names = [
-            "o", "oo", "ooo", "8o", "I", "O", "T", "S", "Z", "L", "J", "F", "P", "N", "U", "V",
-            "W", "X", "Y", "II", "LL", "TT", "ZZ",
-        ];
         let mut seen: HashSet<Vec<(i32, i32)>> = HashSet::new();
-        for &name in &names {
-            if let Some(shape) = polyomino::get_named_shape(name) {
-                if shape.cells.len() == target {
-                    let canon = canonical(&shape);
-                    if seen.insert(canon.cells.clone()) {
-                        self.puzzle.rules.shape_bank.push(shape);
-                    }
+        for size in self.eff_min_area..=self.eff_max_area {
+            let shapes = polyomino::enumerate_free_polyominoes(size);
+            for shape in shapes {
+                let canon = canonical(&shape);
+                if seen.insert(canon.cells.clone()) {
+                    self.puzzle.rules.shape_bank.push(shape);
                 }
             }
         }
@@ -430,10 +424,7 @@ impl Solver {
             }
             let pieces = self.compute_pieces_from_groups(solution, area_groups);
             if self.validate(&pieces) {
-                self.solution_count += 1;
-                self.best_pieces = pieces;
-                self.best_edges = self.edges.clone();
-                self.report_solution(self.solution_count);
+                self.save_solution(pieces);
             }
             return;
         }

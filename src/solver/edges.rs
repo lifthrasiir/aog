@@ -170,10 +170,7 @@ impl Solver {
                 if self.solution_count > 0 && self.edges == self.best_edges {
                     return;
                 }
-                self.solution_count += 1;
-                self.best_pieces = pieces;
-                self.best_edges = self.edges.clone();
-                self.report_solution(self.solution_count);
+                self.save_solution(pieces);
             }
             return;
         }

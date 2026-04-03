@@ -55,10 +55,7 @@ impl Solver {
 
         let pieces = self.compute_pieces();
         if self.validate(&pieces) {
-            self.solution_count += 1;
-            self.best_pieces = pieces;
-            self.best_edges = self.edges.clone();
-            self.report_solution(self.solution_count);
+            self.save_solution(pieces);
         }
 
         self.restore(snap);

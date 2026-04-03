@@ -148,18 +148,33 @@ shape bank T L
         assert_eq!(count, 1);
     }
 
-    /// Extract expected solution lines from a sample file.
-    /// Returns None if the file should be skipped (no `# unique solution` or contains `skip`).
-    /// Otherwise returns (timeout_secs, expected_lines).
-    fn parse_sample_solution(content: &str) -> Option<(u64, Vec<String>)> {
+    enum SampleExpected {
+        Unique(Vec<String>),
+        Multiple(Vec<Vec<String>>),
+    }
+
+    /// Extract expected solution(s) from a sample file.
+    /// Returns None if the file should be skipped or has no recognized header.
+    /// For `# unique solution`: returns Unique with the solution lines.
+    /// For `# multiple solutions`: returns Multiple with solution groups separated by `# or`.
+    fn parse_sample_solution(content: &str) -> Option<(u64, SampleExpected)> {
         let mut timeout_secs = 1u64;
         let mut in_solution = false;
-        let mut lines = Vec::new();
+        let mut is_multiple = false;
+        let mut current_group: Vec<String> = Vec::new();
+        let mut all_groups: Vec<Vec<String>> = Vec::new();
 
         for line in content.lines() {
             let trimmed = line.trim();
             if !in_solution {
-                if let Some(rest) = trimmed.strip_prefix("# unique solution") {
+                let (prefix, multiple) = if let Some(r) = trimmed.strip_prefix("# unique solution") {
+                    (Some(r), false)
+                } else if let Some(r) = trimmed.strip_prefix("# multiple solutions") {
+                    (Some(r), true)
+                } else {
+                    (None, false)
+                };
+                if let Some(rest) = prefix {
                     let rest = rest.trim_end_matches(':').trim();
                     if rest.contains("skip") {
                         return None;
@@ -170,20 +185,36 @@ shape bank T L
                         }
                     }
                     in_solution = true;
+                    is_multiple = multiple;
                 }
             } else if let Some(rest) = trimmed.strip_prefix('#') {
                 let rest = rest.trim();
-                if !rest.is_empty() {
-                    lines.push(rest.to_string());
+                if is_multiple && rest == "or" {
+                    all_groups.push(std::mem::take(&mut current_group));
+                } else if !rest.is_empty() {
+                    current_group.push(rest.to_string());
                 }
             }
         }
 
-        if !in_solution || lines.is_empty() {
+        if !in_solution {
             return None;
         }
 
-        Some((timeout_secs, lines))
+        if is_multiple {
+            if !current_group.is_empty() {
+                all_groups.push(current_group);
+            }
+            if all_groups.is_empty() {
+                return None;
+            }
+            Some((timeout_secs, SampleExpected::Multiple(all_groups)))
+        } else {
+            if current_group.is_empty() {
+                return None;
+            }
+            Some((timeout_secs, SampleExpected::Unique(current_group)))
+        }
     }
 
     /// Normalize a solution string: replace digits with spaces, trim each line, remove empty lines.
@@ -205,11 +236,9 @@ shape bank T L
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
 
-        let Some((timeout_secs, expected_lines)) = parse_sample_solution(&content) else {
-            return; // no `# unique solution` or explicitly skipped
+        let Some((timeout_secs, expected)) = parse_sample_solution(&content) else {
+            return; // no recognized header or explicitly skipped
         };
-
-        let expected = normalize_solution(&expected_lines.join("\n"));
 
         let path_display = path.display().to_string();
         let path_display = std::sync::Arc::new(path_display);
@@ -226,21 +255,57 @@ shape bank T L
                     s.mark_pre_cut(e);
                 }
                 let count = s.solve();
-                let output = formatter::format_solution(s.get_grid(), s.get_best_edges(), s.get_best_pieces());
-                let _ = tx.send((count, output));
+                let first = formatter::format_solution(s.get_grid(), s.get_first_edges(), s.get_first_pieces());
+                let best = formatter::format_solution(s.get_grid(), s.get_best_edges(), s.get_best_pieces());
+                let _ = tx.send((count, first, best));
             })
             .expect("failed to spawn thread");
 
         match rx.recv_timeout(std::time::Duration::from_secs(timeout_secs)) {
-            Ok((count, output)) => {
-                assert_eq!(
-                    count, 1,
-                    "{}: expected unique solution, got {}",
-                    path_display, count
-                );
-                let actual = normalize_solution(&output);
-                assert_eq!(actual, expected, "{}: solution shape mismatch", path_display);
-            }
+            Ok((count, first_output, best_output)) => match expected {
+                SampleExpected::Unique(lines) => {
+                    assert_eq!(
+                        count, 1,
+                        "{}: expected unique solution, got {}",
+                        path_display, count
+                    );
+                    let actual = normalize_solution(&best_output);
+                    let expected_norm = normalize_solution(&lines.join("\n"));
+                    assert_eq!(actual, expected_norm, "{}: solution shape mismatch", path_display);
+                }
+                SampleExpected::Multiple(groups) => {
+                    assert!(
+                        count >= 2,
+                        "{}: expected multiple solutions, got {}",
+                        path_display, count
+                    );
+                    let expected_norms: Vec<String> = groups
+                        .iter()
+                        .map(|g| normalize_solution(&g.join("\n")))
+                        .collect();
+                    let first_norm = normalize_solution(&first_output);
+                    let best_norm = normalize_solution(&best_output);
+                    assert_ne!(
+                        first_norm, best_norm,
+                        "{}: two solutions must be different",
+                        path_display
+                    );
+                    assert!(
+                        expected_norms.contains(&first_norm),
+                        "{}: first solution not among expected\ngot:\n{}\nexpected one of:\n{}",
+                        path_display,
+                        first_norm,
+                        expected_norms.join("\n---\n")
+                    );
+                    assert!(
+                        expected_norms.contains(&best_norm),
+                        "{}: second solution not among expected\ngot:\n{}\nexpected one of:\n{}",
+                        path_display,
+                        best_norm,
+                        expected_norms.join("\n---\n")
+                    );
+                }
+            },
             Err(_) => panic!(
                 "{}: timed out after {}s (use `# unique solution ({}s):` to increase)",
                 path_display, timeout_secs, timeout_secs + 1,
