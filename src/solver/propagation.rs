@@ -55,6 +55,29 @@ impl Solver {
         Ok(progress)
     }
 
+    /// Compute the maximum possible final size for a component.
+    /// If the component has a target area, returns that.
+    /// Otherwise, estimates by summing unique adjacent component sizes
+    /// through remaining Unknown growth edges, capped at eff_max_area.
+    fn growth_potential(&self, ci: usize, growth_edges: &[Vec<EdgeId>]) -> usize {
+        self.curr_target_area[ci].unwrap_or_else(|| {
+            let mut adj_sz: HashSet<usize> = HashSet::new();
+            for &ge in &growth_edges[ci] {
+                if self.edges[ge] != EdgeState::Unknown {
+                    continue;
+                }
+                let (gc1, gc2) = self.grid.edge_cells(ge);
+                let other_ci = if self.curr_comp_id[gc1] == ci {
+                    self.curr_comp_id[gc2]
+                } else {
+                    self.curr_comp_id[gc1]
+                };
+                adj_sz.insert(self.curr_comp_sz[other_ci]);
+            }
+            (self.curr_comp_sz[ci] + adj_sz.iter().sum::<usize>()).min(self.eff_max_area)
+        })
+    }
+
     pub(crate) fn propagate_area_bounds(&mut self) -> Result<bool, ()> {
         let mut progress = false;
         let n = self.grid.num_cells();
@@ -797,22 +820,36 @@ impl Solver {
             }
             if smaller_done {
                 // Component-wise max: use actual growth potential instead of global eff_max_area
-                let max_larger = self.curr_target_area[larger_ci].unwrap_or_else(|| {
-                    // Sum unique adjacent component sizes through remaining Unknown edges
-                    let mut adj_sz: HashSet<usize> = HashSet::new();
-                    for &ge in &growth_edges[larger_ci] {
-                        if self.edges[ge] != EdgeState::Unknown {
-                            continue;
-                        }
-                        let (gc1, gc2) = self.grid.edge_cells(ge);
-                        let other_ci =
-                            if self.curr_comp_id[gc1] == larger_ci { self.curr_comp_id[gc2] } else { self.curr_comp_id[gc1] };
-                        adj_sz.insert(self.curr_comp_sz[other_ci]);
-                    }
-                    (self.curr_comp_sz[larger_ci] + adj_sz.iter().sum::<usize>()).min(self.eff_max_area)
-                });
+                let max_larger = self.growth_potential(larger_ci, &growth_edges);
                 if self.curr_comp_sz[smaller_ci] >= max_larger {
                     return Err(());
+                }
+            } else if larger_done {
+                // Larger sealed, smaller still growing: smaller's target must stay below larger
+                if let Some(t) = self.curr_target_area[smaller_ci] {
+                    if t >= self.curr_comp_sz[larger_ci] {
+                        return Err(());
+                    }
+                }
+            } else {
+                // Both sides growing: use growth potentials for bounds checking
+                let max_larger = self.growth_potential(larger_ci, &growth_edges);
+
+                // If smaller's current size already >= larger's maximum possible → impossible
+                if self.curr_comp_sz[smaller_ci] >= max_larger {
+                    return Err(());
+                }
+                // If smaller has a target that would make it >= larger's max → impossible
+                if let Some(t) = self.curr_target_area[smaller_ci] {
+                    if t >= max_larger {
+                        return Err(());
+                    }
+                }
+                // If larger has a target that would make it <= smaller's current → impossible
+                if let Some(t) = self.curr_target_area[larger_ci] {
+                    if t <= self.curr_comp_sz[smaller_ci] {
+                        return Err(());
+                    }
                 }
             }
         }
