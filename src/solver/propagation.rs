@@ -1398,6 +1398,85 @@ impl Solver {
         // Adjacent cell pairs in the 2×2 layout: (TL,TR), (TL,BL), (TR,BR), (BL,BR)
         let cell_pair_indices: [(usize, usize); 4] = [(0, 1), (0, 2), (1, 3), (2, 3)];
 
+        // === Component-ID-based pass ===
+        // Use curr_comp_id for more precise distinct piece counting.
+        // Sealed components are definitely separate pieces; growing components
+        // might merge, giving us a [min_distinct, max_distinct] range.
+        // Only run when curr_comp_id has been populated (by propagate_area_bounds).
+        if !self.curr_comp_id.is_empty() {
+        let comp_id_results: Vec<(bool, Vec<EdgeId>)> = self
+            .puzzle
+            .vertex_clues
+            .iter()
+            .map(|clue| {
+                let (vi, vj) = self.grid.vertex_pos(clue.vertex);
+                let cell_opts = self.grid.vertex_cells(vi, vj);
+                let value = clue.value;
+
+                let cells: Vec<CellId> = cell_opts
+                    .iter()
+                    .copied()
+                    .flatten()
+                    .filter(|&cid| self.grid.cell_exists[cid])
+                    .collect();
+                let n = cells.len();
+                if n == 0 || value > n || (n == 1 && value > 1) {
+                    return (false, vec![]); // will be caught by edge-based pass
+                }
+
+                let comp_set: HashSet<usize> =
+                    cells.iter().map(|&c| self.curr_comp_id[c]).collect();
+                let num_sealed = comp_set
+                    .iter()
+                    .filter(|&&ci| !self.can_grow_buf[ci])
+                    .count();
+                let num_growing = comp_set.len() - num_sealed;
+
+                let min_distinct = num_sealed + if num_growing > 0 { 1 } else { 0 };
+                let max_distinct = comp_set.len();
+
+                let is_err = value < min_distinct || value > max_distinct;
+
+                let mut forced_cuts = Vec::new();
+                if max_distinct == value && comp_set.len() > 1 {
+                    for &(a_idx, b_idx) in &cell_pair_indices {
+                        if let (Some(a), Some(b)) = (cell_opts[a_idx], cell_opts[b_idx]) {
+                            if !self.grid.cell_exists[a] || !self.grid.cell_exists[b] {
+                                continue;
+                            }
+                            if self.curr_comp_id[a] != self.curr_comp_id[b] {
+                                if let Some(eid) = self.grid.edge_between(a, b) {
+                                    if self.edges[eid] == EdgeState::Unknown {
+                                        forced_cuts.push(eid);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                (is_err, forced_cuts)
+            })
+            .collect();
+
+        for (is_err, _) in &comp_id_results {
+            if *is_err {
+                return Err(());
+            }
+        }
+        for (_, forced_cuts) in &comp_id_results {
+            for &eid in forced_cuts {
+                let p = self.set_edge(eid, EdgeState::Cut);
+                if !p {
+                    return Err(());
+                }
+                progress = true;
+            }
+        }
+        } // end if !curr_comp_id.is_empty()
+
+        // === Edge-based pass (original logic) ===
+
         // Collect constraints upfront to avoid borrow conflicts
         let constraints: Vec<(usize, Vec<EdgeId>, bool)> = self
             .puzzle
