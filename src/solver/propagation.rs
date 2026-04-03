@@ -1,7 +1,7 @@
 use super::Solver;
 use crate::polyomino::{self, canonical, Rotation};
 use crate::types::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 impl Solver {
     pub(crate) fn propagate(&mut self) -> Result<bool, ()> {
@@ -210,6 +210,174 @@ impl Solver {
                 }
                 progress = true;
             }
+        }
+
+        // === Size separation: early propagation (Proposals A + B + D) ===
+        if self.puzzle.rules.size_separation {
+            // Step 1: Build sealed_neighbor_sizes — for each component, the sizes
+            // of its adjacent sealed components (connected by Cut edges).
+            // Also include target areas of adjacent growing components that have
+            // a fixed target — their final size is known even before they seal.
+            let mut sealed_neighbor_sizes: Vec<HashSet<usize>> = vec![HashSet::new(); num_comp];
+            for e in 0..self.grid.num_edges() {
+                if self.edges[e] != EdgeState::Cut {
+                    continue;
+                }
+                let (c1, c2) = self.grid.edge_cells(e);
+                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                    continue;
+                }
+                let ci1 = self.curr_comp_id[c1];
+                let ci2 = self.curr_comp_id[c2];
+                if ci1 == ci2 {
+                    continue;
+                }
+                // Sealed component: its current size is its final size
+                if !self.can_grow_buf[ci1] {
+                    sealed_neighbor_sizes[ci2].insert(self.curr_comp_sz[ci1]);
+                } else if let Some(t) = self.curr_target_area[ci1] {
+                    // Growing with target: final size will be t
+                    sealed_neighbor_sizes[ci2].insert(t);
+                }
+                if !self.can_grow_buf[ci2] {
+                    sealed_neighbor_sizes[ci1].insert(self.curr_comp_sz[ci2]);
+                } else if let Some(t) = self.curr_target_area[ci2] {
+                    sealed_neighbor_sizes[ci1].insert(t);
+                }
+            }
+
+            // Step 2 (Proposal A): For each Unknown growth edge, check if merging
+            // the two adjacent components would create a size that conflicts with
+            // any sealed neighbor of either component. If so, force Cut.
+            let mut merge_conflict_cuts: Vec<EdgeId> = Vec::new();
+            for e in 0..self.grid.num_edges() {
+                if self.edges[e] != EdgeState::Unknown {
+                    continue;
+                }
+                let (c1, c2) = self.grid.edge_cells(e);
+                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                    continue;
+                }
+                let ci1 = self.curr_comp_id[c1];
+                let ci2 = self.curr_comp_id[c2];
+                if ci1 == ci2 {
+                    continue;
+                }
+                let merged_sz = self.curr_comp_sz[ci1] + self.curr_comp_sz[ci2];
+                if sealed_neighbor_sizes[ci1].contains(&merged_sz)
+                    || sealed_neighbor_sizes[ci2].contains(&merged_sz)
+                {
+                    merge_conflict_cuts.push(e);
+                }
+            }
+            for &e in &merge_conflict_cuts {
+                if self.edges[e] == EdgeState::Unknown {
+                    if !self.set_edge(e, EdgeState::Cut) {
+                        return Err(());
+                    }
+                    progress = true;
+                }
+            }
+
+            // Step 3 (Proposal B): Forbidden size checks.
+            // (a) If a growing component's target area is forbidden → contradiction.
+            // (b) If a growing component's current size is forbidden and it has
+            //     exactly 1 growth edge, force that edge Uncut (Proposal D).
+            let mut forced_uncuts: Vec<EdgeId> = Vec::new();
+            for ci in 0..num_comp {
+                if self.can_grow_buf[ci] {
+                    continue;
+                }
+                let forbidden = &sealed_neighbor_sizes[ci];
+                if forbidden.is_empty() {
+                    continue;
+                }
+
+                // (a) Target area is forbidden
+                if let Some(t) = self.curr_target_area[ci] {
+                    if forbidden.contains(&t) {
+                        return Err(());
+                    }
+                }
+
+                // Sealed component at forbidden size — already caught by the
+                // sealed-vs-sealed check below, but let's be explicit:
+                if forbidden.contains(&self.curr_comp_sz[ci]) {
+                    return Err(());
+                }
+            }
+            // (b) Growing components: check if current size is forbidden
+            for ci in 0..num_comp {
+                if !self.can_grow_buf[ci] {
+                    continue; // sealed, already handled above
+                }
+                let forbidden = &sealed_neighbor_sizes[ci];
+                if forbidden.is_empty() {
+                    continue;
+                }
+                let cur_sz = self.curr_comp_sz[ci];
+
+                // Target area is forbidden
+                if let Some(t) = self.curr_target_area[ci] {
+                    if forbidden.contains(&t) {
+                        return Err(());
+                    }
+                }
+
+                // Current size is forbidden → must grow.
+                // If exactly 1 growth edge remains, force it Uncut.
+                if forbidden.contains(&cur_sz) {
+                    let mut unk_count = 0usize;
+                    let mut last_unk = None;
+                    for &e in &growth_edges[ci] {
+                        if self.edges[e] == EdgeState::Unknown {
+                            unk_count += 1;
+                            last_unk = Some(e);
+                        }
+                    }
+                    if unk_count == 0 {
+                        return Err(()); // sealed at forbidden size
+                    }
+                    if unk_count == 1 {
+                        forced_uncuts.push(last_unk.unwrap());
+                    }
+                }
+            }
+            for &e in &forced_uncuts {
+                if self.edges[e] == EdgeState::Unknown {
+                    if !self.set_edge(e, EdgeState::Uncut) {
+                        return Err(());
+                    }
+                    progress = true;
+                }
+            }
+
+            // Cache for edge selection heuristic (Proposal C)
+            self.cached_sealed_neighbor_sizes = Some(sealed_neighbor_sizes);
+        } else {
+            self.cached_sealed_neighbor_sizes = None;
+        }
+
+        // Cache growth edge counts for edge selection heuristic
+        {
+            let mut gec = vec![0usize; num_comp];
+            for e in 0..self.grid.num_edges() {
+                if self.edges[e] != EdgeState::Unknown {
+                    continue;
+                }
+                let (c1, c2) = self.grid.edge_cells(e);
+                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                    continue;
+                }
+                let ci1 = self.curr_comp_id[c1];
+                let ci2 = self.curr_comp_id[c2];
+                if ci1 == ci2 {
+                    continue;
+                }
+                gec[ci1] += 1;
+                gec[ci2] += 1;
+            }
+            self.cached_growth_edge_count = gec;
         }
 
         for ci in 0..num_comp {

@@ -50,6 +50,9 @@ pub struct Solver {
     // Optimization: when sum of distinct area values equals total_cells,
     // all cells with the same area number must be in the same piece.
     pub(crate) same_area_groups: bool,
+    // Cached from last propagate_area_bounds() for edge selection heuristic
+    pub(crate) cached_sealed_neighbor_sizes: Option<Vec<HashSet<usize>>>,
+    pub(crate) cached_growth_edge_count: Vec<usize>,
 }
 
 impl Solver {
@@ -94,6 +97,8 @@ impl Solver {
             cell_clues_indexed,
             has_any_clue,
             same_area_groups: false,
+            cached_sealed_neighbor_sizes: None,
+            cached_growth_edge_count: Vec::new(),
         }
     }
 
