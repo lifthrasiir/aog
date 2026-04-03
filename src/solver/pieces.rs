@@ -7,10 +7,13 @@ use std::collections::HashSet;
 impl Solver {
     fn is_placement_valid(&self, cells: &[CellId], shape_idx: usize, rose_symbols: &[u8]) -> bool {
         // Internal edges must not be Cut or Pre-cut
-        for i in 0..cells.len() {
-            for j in (i + 1)..cells.len() {
-                if let Some(e) = self.grid.edge_between(cells[i], cells[j]) {
-                    if self.is_pre_cut[e] || self.edges[e] == EdgeState::Cut {
+        let cell_set: HashSet<CellId> = cells.iter().copied().collect();
+        for &cid in cells {
+            for eid in self.grid.cell_edges(cid).into_iter().flatten() {
+                let (c1, c2) = self.grid.edge_cells(eid);
+                let other = if c1 == cid { c2 } else { c1 };
+                if other > cid && cell_set.contains(&other) {
+                    if self.is_pre_cut[eid] || self.edges[eid] == EdgeState::Cut {
                         return false;
                     }
                 }
