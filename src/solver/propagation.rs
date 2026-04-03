@@ -794,11 +794,16 @@ impl Solver {
             }
         }
 
-        // Compute canonical shapes for sealed components (shared by mingle_shape & gemini)
+        // Compute canonical shapes for sealed components (shared by mingle_shape, gemini & mismatch)
         let has_mingle = self.puzzle.rules.mingle_shape;
-        let has_gemini = self.puzzle.edge_clues.iter().any(|cl| matches!(cl.kind, EdgeClueKind::Gemini));
+        let has_gemini = self
+            .puzzle
+            .edge_clues
+            .iter()
+            .any(|cl| matches!(cl.kind, EdgeClueKind::Gemini));
+        let has_mismatch = self.puzzle.rules.mismatch;
 
-        if has_mingle || has_gemini {
+        if has_mingle || has_gemini || has_mismatch {
             let mut comp_shape: Vec<Option<Shape>> = vec![None; num_comp];
             for ci in 0..num_comp {
                 if self.can_grow_buf[ci] {
@@ -916,6 +921,62 @@ impl Solver {
                     // (e.g., monominoes from pre-cut edges), and forcing adjacent
                     // components to stay small would incorrectly cascade and
                     // prevent valid growth toward shape bank requirements.
+                }
+            }
+
+            // Mismatch: all pieces must have distinct canonical shapes.
+            // 1) Two sealed components sharing the same shape → contradiction.
+            // 2) Growing component whose target area has no available shape left → contradiction.
+            if has_mismatch {
+                // Build set of canonical shapes used by sealed components
+                let mut taken_shapes: HashSet<Shape> = HashSet::new();
+                for ci in 0..num_comp {
+                    if let Some(shape) = &comp_shape[ci] {
+                        if !taken_shapes.insert(shape.clone()) {
+                            return Err(()); // duplicate shape among sealed components
+                        }
+                    }
+                }
+
+                // Growing components: check if at least one shape of their target size is available
+                for ci in 0..num_comp {
+                    if !self.can_grow_buf[ci] {
+                        continue; // already sealed, handled above
+                    }
+                    let Some(target) = self.curr_target_area[ci] else {
+                        continue; // no fixed target area, skip
+                    };
+
+                    let mut any_available = false;
+
+                    if !self.puzzle.rules.shape_bank.is_empty() {
+                        // Shape bank: check canonical shapes of matching size in the bank
+                        for bs in &self.puzzle.rules.shape_bank {
+                            if bs.cells.len() != target {
+                                continue;
+                            }
+                            let bc = canonical(bs);
+                            if !taken_shapes.contains(&bc) {
+                                any_available = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        // No shape bank: for small sizes, enumerate free polyominoes
+                        if target <= 4 {
+                            let all_shapes =
+                                polyomino::enumerate_free_polyominoes(target);
+                            any_available =
+                                all_shapes.iter().any(|s| !taken_shapes.contains(s));
+                        } else {
+                            // Too many shapes to enumerate; skip this check
+                            any_available = true;
+                        }
+                    }
+
+                    if !any_available {
+                        return Err(());
+                    }
                 }
             }
         }
@@ -1601,6 +1662,124 @@ mod tests {
         assert!(
             s.propagate_area_bounds().is_err(),
             "gemini: conflicting size requirements (1 vs 2) should be contradiction"
+        );
+    }
+
+    // === Mismatch propagation tests ===
+
+    /// Helper: create a 2x2 solver with mismatch rule enabled.
+    fn make_mismatch_solver_2x2() -> Solver {
+        let mut s = make_solver(
+            "\
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+",
+        );
+        s.puzzle.rules.mismatch = true;
+        s
+    }
+
+    #[test]
+    fn mismatch_sealed_sealed_duplicate_shape_err() {
+        // 2x2: two sealed monominoes with mismatch → contradiction.
+        // (0,0) and (0,1) both sealed at size 1 → same canonical shape.
+        let mut s = make_mismatch_solver_2x2();
+        // Cut all 4 internal edges to seal everything as monominoes
+        let _ = s.set_edge(s.grid.v_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "mismatch: two sealed monominoes should be contradiction"
+        );
+    }
+
+    #[test]
+    fn mismatch_sealed_sealed_different_shapes_ok() {
+        // 2x2: one monomino and one triomino (L-shape) → different shapes, OK.
+        let mut s = make_mismatch_solver_2x2();
+        // (0,0) is a monomino: cut all its edges
+        let _ = s.set_edge(s.grid.v_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        // Remaining 3 cells form an L-triomino: keep them connected
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Uncut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Uncut);
+
+        assert!(
+            s.propagate_area_bounds().is_ok(),
+            "mismatch: monomino + L-triomino should be valid"
+        );
+    }
+
+    #[test]
+    fn mismatch_growing_no_available_shape_shape_bank() {
+        // 2x2 with shape bank containing only the monomino (size 1).
+        // One monomino sealed → taken. Another component targeting size 1 → contradiction.
+        use crate::polyomino::get_named_shape;
+        let mut s = make_mismatch_solver_2x2();
+        // Only allow monomino in shape bank
+        s.puzzle.rules.shape_bank.push(get_named_shape("o").unwrap());
+        // (0,0) sealed as monomino
+        let _ = s.set_edge(s.grid.v_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        // (0,1) targets size 1 (area clue) but only monomino exists and it's taken
+        s.puzzle.cell_clues.push(CellClue::Area {
+            cell: s.grid.cell_id(0, 1),
+            value: 1,
+        });
+        // Cut edges to seal (0,1) as monomino
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "mismatch: only one shape in bank of size 1, already taken → contradiction"
+        );
+    }
+
+    #[test]
+    fn mismatch_growing_available_shape_shape_bank() {
+        // 2x2 with shape bank containing monomino and domino.
+        // One monomino sealed → taken. Another targeting size 1 has no alternative → err,
+        // but this test checks that a size-2 target is fine.
+        use crate::polyomino::get_named_shape;
+        let mut s = make_mismatch_solver_2x2();
+        s.puzzle.rules.shape_bank.push(get_named_shape("o").unwrap());
+        s.puzzle.rules.shape_bank.push(get_named_shape("oo").unwrap());
+        // (0,0) sealed as monomino (takes the only size-1 shape)
+        let _ = s.set_edge(s.grid.v_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        // Remaining 3 cells target size 2 — domino is available
+        s.puzzle.cell_clues.push(CellClue::Area {
+            cell: s.grid.cell_id(0, 1),
+            value: 2,
+        });
+
+        // Should not be a contradiction (domino is available)
+        assert!(
+            s.propagate_area_bounds().is_ok(),
+            "mismatch: domino still available for size 2 target"
+        );
+    }
+
+    #[test]
+    fn mismatch_no_shape_bank_small_size_exhausted() {
+        // 2x2 with no shape bank, mismatch enabled.
+        // Two sealed monominoes → only 1 free polyomino of size 1, both taken → err.
+        let mut s = make_mismatch_solver_2x2();
+        // Seal (0,0) as monomino
+        let _ = s.set_edge(s.grid.v_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        // Seal (0,1) as monomino
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "mismatch: two monominoes with no shape bank → only 1 shape of size 1 → err"
         );
     }
 }
