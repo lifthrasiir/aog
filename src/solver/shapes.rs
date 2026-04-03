@@ -1,7 +1,7 @@
 use super::Solver;
 use crate::polyomino::{self, canonical, Rotation};
 use crate::types::*;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 impl Solver {
     pub(crate) fn compute_area_bounds(&mut self) {
@@ -448,7 +448,11 @@ impl Solver {
             }
             solution.push((gi, cells.clone()));
 
-            self.grouped_backtrack(order, all_placements, area_groups, used, solution);
+            // Check adjacency constraints against previously placed groups
+            let adj_ok = self.check_grouped_adjacency(solution, area_groups);
+            if adj_ok {
+                self.grouped_backtrack(order, all_placements, area_groups, used, solution);
+            }
 
             // Unmark
             solution.pop();
@@ -460,6 +464,84 @@ impl Solver {
                 return;
             }
         }
+    }
+
+    /// Check size_separation and mingle_shape constraints between the most
+    /// recently placed group and all previously placed adjacent groups.
+    fn check_grouped_adjacency(
+        &self,
+        solution: &[(usize, Vec<CellId>)],
+        area_groups: &[(usize, Vec<CellId>)],
+    ) -> bool {
+        if !self.puzzle.rules.size_separation && !self.puzzle.rules.mingle_shape {
+            return true;
+        }
+
+        let last_idx = solution.len() - 1;
+        let (_, ref last_cells) = solution[last_idx];
+        let last_area = area_groups[solution[last_idx].0].0;
+        let last_set: HashSet<CellId> = last_cells.iter().copied().collect();
+
+        // Compute canonical shape of the last group for mingle_shape check
+        let last_canonical = if self.puzzle.rules.mingle_shape {
+            let sc: Vec<(i32, i32)> = last_cells
+                .iter()
+                .map(|&c| {
+                    let (r, col) = self.grid.cell_pos(c);
+                    (r as i32, col as i32)
+                })
+                .collect();
+            Some(canonical(&polyomino::make_shape(&sc)))
+        } else {
+            None
+        };
+
+        // Build cell_to_piece for all placed groups
+        let mut cell_to_piece: HashMap<CellId, usize> = HashMap::new();
+        for (pi, (_, ref cells)) in solution.iter().enumerate() {
+            for &c in cells {
+                cell_to_piece.insert(c, pi);
+            }
+        }
+
+        // For each cell in the last placed group, check grid neighbors
+        for &cid in last_cells {
+            for eid in self.grid.cell_edges(cid).into_iter().flatten() {
+                let (c1, c2) = self.grid.edge_cells(eid);
+                let other = if c1 == cid { c2 } else { c1 };
+                if !self.grid.cell_exists[other] || last_set.contains(&other) {
+                    continue;
+                }
+                let Some(&other_pi) = cell_to_piece.get(&other) else {
+                    continue;
+                };
+                if other_pi == last_idx {
+                    continue;
+                }
+                let other_area = area_groups[solution[other_pi].0].0;
+
+                if self.puzzle.rules.size_separation && last_area == other_area {
+                    return false;
+                }
+
+                if let Some(ref last_shape) = last_canonical {
+                    let (_, ref other_cells): &(usize, Vec<CellId>) = &solution[other_pi];
+                    let osc: Vec<(i32, i32)> = other_cells
+                        .iter()
+                        .map(|&c| {
+                            let (r, col) = self.grid.cell_pos(c);
+                            (r as i32, col as i32)
+                        })
+                        .collect();
+                    let other_shape = canonical(&polyomino::make_shape(&osc));
+                    if last_shape != &other_shape {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
     }
 
     fn compute_pieces_from_groups(

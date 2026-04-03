@@ -376,7 +376,8 @@ impl Solver {
                         | EdgeClueKind::Gemini
                         | EdgeClueKind::Diff { .. }
                 )
-            });
+            }) || self.puzzle.rules.size_separation
+                || self.puzzle.rules.mingle_shape;
 
             if has_edge_constraints {
                 eprintln!(
@@ -399,8 +400,22 @@ impl Solver {
                     })
                     .collect();
 
+                // Pre-compute all adjacent cell pairs for size_separation/mingle_shape checks
+                let adjacent_pairs: Vec<(CellId, CellId)> = (0..self.grid.num_edges())
+                    .filter_map(|e| {
+                        let (c1, c2) = self.grid.edge_cells(e);
+                        if self.grid.cell_exists[c1] && self.grid.cell_exists[c2] {
+                            Some((c1, c2))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
                 let num_cells_total = self.grid.num_cells();
                 let mut cell_to_piece = vec![usize::MAX; num_cells_total];
+                let check_size_sep = self.puzzle.rules.size_separation;
+                let check_mingle = self.puzzle.rules.mingle_shape;
 
                 let mut row_check = |solution: &[usize]| -> bool {
                     // Rebuild cell→piece mapping from solution
@@ -447,6 +462,35 @@ impl Solver {
                             }
                         }
                     }
+
+                    // Size separation: adjacent pieces must have different areas
+                    if check_size_sep {
+                        for &(c1, c2) in &adjacent_pairs {
+                            let p1 = cell_to_piece[c1];
+                            let p2 = cell_to_piece[c2];
+                            if p1 == usize::MAX || p2 == usize::MAX || p1 == p2 {
+                                continue;
+                            }
+                            if placements[solution[p1]].area == placements[solution[p2]].area {
+                                return false;
+                            }
+                        }
+                    }
+
+                    // Mingle shape: adjacent pieces must have same shape
+                    if check_mingle {
+                        for &(c1, c2) in &adjacent_pairs {
+                            let p1 = cell_to_piece[c1];
+                            let p2 = cell_to_piece[c2];
+                            if p1 == usize::MAX || p2 == usize::MAX || p1 == p2 {
+                                continue;
+                            }
+                            if placements[solution[p1]].canonical != placements[solution[p2]].canonical {
+                                return false;
+                            }
+                        }
+                    }
+
                     true
                 };
 

@@ -1,5 +1,5 @@
 use super::Solver;
-use crate::polyomino::Rotation;
+use crate::polyomino::{self, canonical, Rotation};
 use crate::types::*;
 use std::collections::{HashMap, VecDeque};
 
@@ -507,6 +507,74 @@ impl Solver {
                 let max_larger = self.curr_target_area[larger_ci].unwrap_or(self.eff_max_area);
                 if self.curr_comp_sz[smaller_ci] >= max_larger {
                     return Err(());
+                }
+            }
+        }
+
+        // Size separation: adjacent finished components must have different sizes
+        if self.puzzle.rules.size_separation {
+            for e in 0..self.grid.num_edges() {
+                if self.edges[e] != EdgeState::Cut {
+                    continue;
+                }
+                let (c1, c2) = self.grid.edge_cells(e);
+                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                    continue;
+                }
+                let ci1 = self.curr_comp_id[c1];
+                let ci2 = self.curr_comp_id[c2];
+                if ci1 == ci2 {
+                    continue;
+                }
+                if self.can_grow_buf[ci1] || self.can_grow_buf[ci2] {
+                    continue;
+                }
+                if self.curr_comp_sz[ci1] == self.curr_comp_sz[ci2] {
+                    return Err(());
+                }
+            }
+        }
+
+        // Mingle shape: adjacent finished components must have the same shape
+        if self.puzzle.rules.mingle_shape {
+            let mut comp_shape: Vec<Option<Shape>> = vec![None; num_comp];
+            for ci in 0..num_comp {
+                if self.can_grow_buf[ci] {
+                    continue;
+                }
+                let at_limit = match self.curr_target_area[ci] {
+                    Some(t) => self.curr_comp_sz[ci] == t,
+                    None => true,
+                };
+                if !at_limit {
+                    continue;
+                }
+                let cells: Vec<(i32, i32)> = (0..n)
+                    .filter(|&c| self.grid.cell_exists[c] && self.curr_comp_id[c] == ci)
+                    .map(|c| {
+                        let (r, col) = self.grid.cell_pos(c);
+                        (r as i32, col as i32)
+                    })
+                    .collect();
+                comp_shape[ci] = Some(canonical(&polyomino::make_shape(&cells)));
+            }
+
+            for e in 0..self.grid.num_edges() {
+                if self.edges[e] != EdgeState::Cut {
+                    continue;
+                }
+                let (c1, c2) = self.grid.edge_cells(e);
+                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                    continue;
+                }
+                let ci1 = self.curr_comp_id[c1];
+                let ci2 = self.curr_comp_id[c2];
+                if ci1 == ci2 {
+                    continue;
+                }
+                match (&comp_shape[ci1], &comp_shape[ci2]) {
+                    (Some(s1), Some(s2)) if s1 != s2 => return Err(()),
+                    _ => {}
                 }
             }
         }
