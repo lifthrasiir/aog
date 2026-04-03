@@ -381,22 +381,19 @@ impl Solver {
                 || !self.puzzle.vertex_clues.is_empty();
 
             // Pre-compute watchtower vertex data for row_check
-            let watchtower_verts: Vec<([CellId; 4], usize)> = self
+            let watchtower_verts: Vec<(Vec<CellId>, usize)> = self
                 .puzzle
                 .vertex_clues
                 .iter()
                 .filter_map(|clue| {
                     let (vi, vj) = self.grid.vertex_pos(clue.vertex);
-                    if vi == 0 || vj == 0 {
-                        return None;
-                    }
-                    let cells = [
-                        self.grid.cell_id(vi - 1, vj - 1),
-                        self.grid.cell_id(vi - 1, vj),
-                        self.grid.cell_id(vi, vj - 1),
-                        self.grid.cell_id(vi, vj),
-                    ];
-                    if cells.iter().all(|&c| self.grid.cell_exists[c]) {
+                    let cell_opts = self.grid.vertex_cells(vi, vj);
+                    let cells: Vec<CellId> = cell_opts
+                        .into_iter()
+                        .flatten()
+                        .filter(|&cid| self.grid.cell_exists[cid])
+                        .collect();
+                    if cells.len() >= 2 && clue.value <= cells.len() {
                         Some((cells, clue.value))
                     } else {
                         None

@@ -1190,45 +1190,72 @@ impl Solver {
 
     /// Propagate watchtower (vertex) clues.
     ///
-    /// For an interior vertex with 4 surrounding cells forming a 2×2 block,
-    /// the 4 internal edges between those cells determine connectivity:
-    ///   k internal cut edges → max(1, k) distinct pieces at the vertex.
-    /// So value=v means exactly v of those 4 internal edges must be Cut.
+    /// For a vertex surrounded by N existing cells with E internal edges:
+    ///   - N=4, E=4 (2×2 block, one cycle): pieces = max(1, k) where k = cut edges
+    ///   - N=2..3 (tree): pieces = 1 + k
+    ///   - N=1: always 1 piece (no edges to propagate)
+    /// value=v constrains the required number of cut edges accordingly.
     pub(crate) fn propagate_watchtower(&mut self) -> Result<bool, ()> {
         let mut progress = false;
+        // Adjacent cell pairs in the 2×2 layout: (TL,TR), (TL,BL), (TR,BR), (BL,BR)
+        let cell_pair_indices: [(usize, usize); 4] = [(0, 1), (0, 2), (1, 3), (2, 3)];
+
         // Collect constraints upfront to avoid borrow conflicts
-        let constraints: Vec<(usize, Vec<EdgeId>)> = self
+        let constraints: Vec<(usize, Vec<EdgeId>, bool)> = self
             .puzzle
             .vertex_clues
             .iter()
             .filter_map(|clue| {
                 let (vi, vj) = self.grid.vertex_pos(clue.vertex);
-                if vi == 0 || vj == 0 {
-                    return None; // border vertex
+                let cell_opts = self.grid.vertex_cells(vi, vj);
+                let value = clue.value;
+
+                // Count existing cells
+                let n = cell_opts
+                    .iter()
+                    .copied()
+                    .flatten()
+                    .filter(|&cid| self.grid.cell_exists[cid])
+                    .count();
+
+                if n == 0 || (n == 1 && value == 1) {
+                    return None; // nothing to propagate
                 }
-                let tl = self.grid.cell_id(vi - 1, vj - 1);
-                let tr = self.grid.cell_id(vi - 1, vj);
-                let bl = self.grid.cell_id(vi, vj - 1);
-                let br = self.grid.cell_id(vi, vj);
-                if !self.grid.cell_exists[tl] || !self.grid.cell_exists[tr]
-                    || !self.grid.cell_exists[bl] || !self.grid.cell_exists[br]
-                {
-                    return None;
+                if value > n {
+                    // More pieces required than cells exist → impossible
+                    return Some((value, vec![], false));
                 }
-                // 4 internal edges of the 2×2 cell group
-                Some((
-                    clue.value,
-                    vec![
-                        self.grid.v_edge(vi - 1, vj - 1), // TL-TR
-                        self.grid.h_edge(vi - 1, vj - 1), // TL-BL
-                        self.grid.h_edge(vi - 1, vj),     // TR-BR
-                        self.grid.v_edge(vi, vj - 1),     // BL-BR
-                    ],
-                ))
+                if n == 1 {
+                    // value > 1 with only 1 cell → impossible
+                    return Some((value, vec![], false));
+                }
+
+                // Collect internal edges between adjacent existing cells
+                let mut edge_ids = Vec::new();
+                for &(a_idx, b_idx) in &cell_pair_indices {
+                    if let (Some(a_cid), Some(b_cid)) = (cell_opts[a_idx], cell_opts[b_idx]) {
+                        if self.grid.cell_exists[a_cid] && self.grid.cell_exists[b_cid] {
+                            if let Some(eid) = self.grid.edge_between(a_cid, b_cid) {
+                                edge_ids.push(eid);
+                            }
+                        }
+                    }
+                }
+
+                let is_cycle = n == 4 && edge_ids.len() == 4;
+                Some((value, edge_ids, is_cycle))
             })
             .collect();
 
-        for (value, edge_ids) in constraints {
+        for (value, edge_ids, is_cycle) in constraints {
+            // Empty edges with value > 1 signals an impossibility (caught above)
+            if edge_ids.is_empty() && value > 1 {
+                return Err(());
+            }
+            if edge_ids.is_empty() {
+                continue;
+            }
+
             let mut n_cut = 0usize;
             let mut unk = Vec::new();
             for &eid in &edge_ids {
@@ -1239,31 +1266,60 @@ impl Solver {
                 }
             }
 
-            if value == 1 {
-                if n_cut >= 2 {
-                    return Err(());
-                }
-                if n_cut == 1 && !unk.is_empty() {
-                    for eid in unk {
-                        if !self.set_edge(eid, EdgeState::Uncut) {
-                            return Err(());
+            if is_cycle {
+                // 4 cells, 4 edges, one cycle: pieces = max(1, k)
+                if value == 1 {
+                    if n_cut >= 2 {
+                        return Err(());
+                    }
+                    if n_cut == 1 && !unk.is_empty() {
+                        for eid in unk {
+                            if !self.set_edge(eid, EdgeState::Uncut) {
+                                return Err(());
+                            }
+                            progress = true;
                         }
-                        progress = true;
+                    }
+                    // n_cut == 0: 0 or 1 cuts both give 1 piece → no forcing
+                } else {
+                    // value >= 2: need exactly value cuts
+                    if n_cut > value {
+                        return Err(());
+                    }
+                    if n_cut == value && !unk.is_empty() {
+                        for eid in unk {
+                            if !self.set_edge(eid, EdgeState::Uncut) {
+                                return Err(());
+                            }
+                            progress = true;
+                        }
+                    } else if n_cut + unk.len() < value {
+                        return Err(());
+                    } else if n_cut + unk.len() == value && !unk.is_empty() {
+                        for eid in unk {
+                            if !self.set_edge(eid, EdgeState::Cut) {
+                                return Err(());
+                            }
+                            progress = true;
+                        }
                     }
                 }
             } else {
-                let needed = (value as usize).saturating_sub(n_cut);
-                if needed > unk.len() {
+                // Tree (2 or 3 cells): pieces = 1 + k, need k = value - 1
+                let needed_k = value.saturating_sub(1);
+                if n_cut > needed_k {
                     return Err(());
                 }
-                if needed == 0 && !unk.is_empty() {
+                if n_cut == needed_k && !unk.is_empty() {
                     for eid in unk {
                         if !self.set_edge(eid, EdgeState::Uncut) {
                             return Err(());
                         }
                         progress = true;
                     }
-                } else if needed == unk.len() && !unk.is_empty() {
+                } else if n_cut + unk.len() < needed_k {
+                    return Err(());
+                } else if n_cut + unk.len() == needed_k && !unk.is_empty() {
                     for eid in unk {
                         if !self.set_edge(eid, EdgeState::Cut) {
                             return Err(());
@@ -1781,5 +1837,254 @@ mod tests {
             s.propagate_area_bounds().is_err(),
             "mismatch: two monominoes with no shape bank → only 1 shape of size 1 → err"
         );
+    }
+
+    // === Watchtower propagation tests ===
+
+    /// Helper: create a solver and add a watchtower vertex clue at grid point (vi, vj).
+    fn make_watchtower_solver(input: &str, vi: usize, vj: usize, value: usize) -> Solver {
+        let mut s = make_solver(input);
+        s.puzzle.vertex_clues.push(VertexClue {
+            vertex: s.grid.vertex(vi, vj),
+            value,
+        });
+        s
+    }
+
+    #[test]
+    fn watchtower_boundary_2cells_value1_forces_uncut() {
+        // 1×2 grid. Vertex (0,1) is a top boundary vertex with cells (0,0) and (0,1).
+        // value=1 → 1 piece → the edge between them must be Uncut.
+        let mut s = make_watchtower_solver(
+            "\
++---+---+
+| _ . _ |
++---+---+
+",
+            0, 1, 1,
+        );
+        let v_edge = s.grid.v_edge(0, 0);
+        assert_eq!(s.edges[v_edge], EdgeState::Unknown);
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_ok());
+        assert!(result.unwrap(), "should have made progress");
+        assert_eq!(s.edges[v_edge], EdgeState::Uncut);
+    }
+
+    #[test]
+    fn watchtower_boundary_2cells_value2_forces_cut() {
+        // 1×2 grid. Vertex (0,1) top boundary. value=2 → edge must be Cut.
+        let mut s = make_watchtower_solver(
+            "\
++---+---+
+| _ . _ |
++---+---+
+",
+            0, 1, 2,
+        );
+        let v_edge = s.grid.v_edge(0, 0);
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        assert_eq!(s.edges[v_edge], EdgeState::Cut);
+    }
+
+    #[test]
+    fn watchtower_boundary_2cells_value2_already_cut_ok() {
+        // 1×2 grid. Edge already Cut, value=2 → no contradiction.
+        let mut s = make_watchtower_solver(
+            "\
++---+---+
+| _ . _ |
++---+---+
+",
+            0, 1, 2,
+        );
+        let v_edge = s.grid.v_edge(0, 0);
+        let _ = s.set_edge(v_edge, EdgeState::Cut);
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_ok());
+        assert!(!result.unwrap(), "no progress needed");
+    }
+
+    #[test]
+    fn watchtower_boundary_2cells_value1_already_uncut_ok() {
+        // 1×2 grid. Edge already Uncut, value=1 → no contradiction.
+        let mut s = make_watchtower_solver(
+            "\
++---+---+
+| _ . _ |
++---+---+
+",
+            0, 1, 1,
+        );
+        let v_edge = s.grid.v_edge(0, 0);
+        let _ = s.set_edge(v_edge, EdgeState::Uncut);
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn watchtower_boundary_2cells_value1_already_cut_err() {
+        // 1×2 grid. Edge already Cut, value=1 → contradiction (2 pieces).
+        let mut s = make_watchtower_solver(
+            "\
++---+---+
+| _ . _ |
++---+---+
+",
+            0, 1, 1,
+        );
+        let v_edge = s.grid.v_edge(0, 0);
+        let _ = s.set_edge(v_edge, EdgeState::Cut);
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_err(), "Cut edge with value=1 should be contradiction");
+    }
+
+    #[test]
+    fn watchtower_boundary_2cells_value3_err() {
+        // 1×2 grid. Only 2 cells but value=3 → impossible.
+        let mut s = make_watchtower_solver(
+            "\
++---+---+
+| _ . _ |
++---+---+
+",
+            0, 1, 3,
+        );
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_err(), "value > n_cells should be contradiction");
+    }
+
+    #[test]
+    fn watchtower_interior_4cells_value1_one_cut_forces_rest_uncut() {
+        // 2×2 grid. Vertex (1,1) interior. value=1.
+        // Set one internal edge to Cut → all others must be Uncut.
+        let mut s = make_watchtower_solver(
+            "\
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+",
+            1, 1, 1,
+        );
+        // Cut the top horizontal edge (TL-TR)
+        let _ = s.set_edge(s.grid.v_edge(0, 0), EdgeState::Cut);
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        // The remaining 3 internal edges should be Uncut
+        assert_eq!(s.edges[s.grid.h_edge(0, 0)], EdgeState::Uncut);
+        assert_eq!(s.edges[s.grid.h_edge(0, 1)], EdgeState::Uncut);
+        assert_eq!(s.edges[s.grid.v_edge(1, 0)], EdgeState::Uncut);
+    }
+
+    #[test]
+    fn watchtower_interior_4cells_value2_two_cuts_forces_rest_uncut() {
+        // 2×2 grid. value=2. Set two cuts → rest Uncut.
+        let mut s = make_watchtower_solver(
+            "\
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+",
+            1, 1, 2,
+        );
+        let _ = s.set_edge(s.grid.v_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        assert_eq!(s.edges[s.grid.h_edge(0, 1)], EdgeState::Uncut);
+        assert_eq!(s.edges[s.grid.v_edge(1, 0)], EdgeState::Uncut);
+    }
+
+    #[test]
+    fn watchtower_interior_4cells_value1_three_cuts_err() {
+        // 2×2 grid. value=1. Set three cuts → contradiction.
+        let mut s = make_watchtower_solver(
+            "\
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+",
+            1, 1, 1,
+        );
+        let _ = s.set_edge(s.grid.v_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn watchtower_interior_4cells_value3_need_all_unknowns_cut() {
+        // 2×2 grid. value=3. One cut + one uncut + two unknowns → both unknowns must be Cut.
+        let mut s = make_watchtower_solver(
+            "\
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+",
+            1, 1, 3,
+        );
+        let _ = s.set_edge(s.grid.v_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Uncut);
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        assert_eq!(s.edges[s.grid.h_edge(0, 1)], EdgeState::Cut);
+        assert_eq!(s.edges[s.grid.v_edge(1, 0)], EdgeState::Cut);
+    }
+
+    #[test]
+    fn watchtower_corner_1cell_value1_no_propagation() {
+        // 1×1 grid. Corner vertex (0,0) has 1 cell. value=1 → no action.
+        let mut s = make_watchtower_solver(
+            "\
++---+
+| _ |
++---+
+",
+            0, 0, 1,
+        );
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_ok());
+        assert!(!result.unwrap(), "no progress for 1-cell vertex");
+    }
+
+    #[test]
+    fn watchtower_corner_1cell_value2_err() {
+        // 1×1 grid. value=2 with only 1 cell → impossible.
+        let mut s = make_watchtower_solver(
+            "\
++---+
+| _ |
++---+
+",
+            0, 0, 2,
+        );
+
+        let result = s.propagate_watchtower();
+        assert!(result.is_err());
     }
 }
