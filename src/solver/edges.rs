@@ -166,6 +166,10 @@ impl Solver {
         if self.curr_unknown == 0 {
             let pieces = self.compute_pieces();
             if self.validate(&pieces) {
+                // Deduplicate: skip if same edge assignment as previous solution
+                if self.solution_count > 0 && self.edges == self.best_edges {
+                    return;
+                }
                 self.solution_count += 1;
                 self.best_pieces = pieces;
                 self.best_edges = self.edges.clone();

@@ -98,6 +98,15 @@ impl CellClue {
             | Self::Compass { cell, .. } => *cell,
         }
     }
+
+    /// Returns the area (cell count) for Area and Polyomino clues.
+    pub fn cell_area(&self) -> Option<usize> {
+        match self {
+            Self::Area { value, .. } => Some(*value),
+            Self::Polyomino { shape, .. } => Some(shape.cells.len()),
+            _ => None,
+        }
+    }
 }
 
 /// Edge clue: semantic meaning of a cut edge.

@@ -1,7 +1,7 @@
 use super::Solver;
 use crate::polyomino::{self, canonical};
 use crate::types::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl Solver {
     const MAX_ENUM_SIZE: usize = 10;
@@ -36,8 +36,272 @@ impl Solver {
                     .collect();
             }
             self.backtrack_pieces();
+        } else if total_clue_area > 0 && self.should_try_hybrid(total_clue_area) {
+            self.solve_hybrid();
         } else {
             self.backtrack_edges();
+        }
+    }
+
+    /// Check if hybrid (piece placements + edge search) is appropriate:
+    /// area clues cover a significant fraction of cells and there are multiple
+    /// area clues of the same value (suggesting piece-based enumeration helps).
+    fn should_try_hybrid(&self, total_clue_area: usize) -> bool {
+        if total_clue_area == 0 || total_clue_area >= self.total_cells {
+            return false;
+        }
+        if self.puzzle.rules.size_separation {
+            return true;
+        }
+        total_clue_area > self.total_cells * 2 / 3
+    }
+
+    /// Hybrid search: enumerate placements for area-clue pieces, try
+    /// non-overlapping combinations, then edge-search the remaining cells.
+    fn solve_hybrid(&mut self) {
+        let placements = self.generate_clue_placements();
+
+        // Group by clue index
+        let num_clues = self
+            .puzzle
+            .cell_clues
+            .iter()
+            .filter(|cl| matches!(cl, CellClue::Area { .. }))
+            .count();
+        let mut groups: Vec<Vec<(usize, Vec<CellId>)>> = vec![Vec::new(); num_clues];
+        for (clue_idx, piece) in &placements {
+            groups[*clue_idx].push((*clue_idx, piece.cells.clone()));
+        }
+
+        for (i, g) in groups.iter().enumerate() {
+            eprintln!("clue {}: {} placements", i, g.len());
+            if g.is_empty() {
+                return; // no valid placements for this clue
+            }
+        }
+
+        // Sort by fewest placements first (most constrained)
+        let mut order: Vec<usize> = (0..num_clues).collect();
+        order.sort_by_key(|&i| groups[i].len());
+
+        let n = self.grid.num_cells();
+        let mut used = vec![false; n];
+        let mut solution: Vec<(usize, Vec<CellId>)> = Vec::new();
+        self.hybrid_backtrack(&order, &groups, &mut used, &mut solution);
+
+        // Phase 2: fast uniqueness check.
+        // After finding the first solution, fix two clue placements at a time
+        // and enumerate alternatives for the third. This is O(sum of alt placements)
+        // instead of O(product of all placements).
+        if self.solution_count == 1 {
+            // Extract known cell sets per clue from the solution
+            let mut known: Vec<HashSet<CellId>> = vec![HashSet::new(); num_clues];
+            for &(clue_idx, ref cells) in &solution {
+                known[clue_idx] = cells.iter().copied().collect();
+            }
+
+            // For each clue, try alternative placements while fixing others
+            for target_clue in 0..num_clues {
+                if self.solution_count >= 2 {
+                    break;
+                }
+                let alt_count = groups[target_clue]
+                    .iter()
+                    .filter(|(_, cells)| {
+                        cells.iter().copied().collect::<HashSet<_>>() != known[target_clue]
+                    })
+                    .count();
+                eprintln!(
+                    "uniqueness check clue {}: {} alternatives",
+                    target_clue, alt_count
+                );
+                for (_, cells) in &groups[target_clue] {
+                    if self.solution_count >= 2 {
+                        break;
+                    }
+                    // Skip if same as known
+                    let cells_set: HashSet<CellId> = cells.iter().copied().collect();
+                    if cells_set == known[target_clue] {
+                        continue;
+                    }
+                    // Check overlap with other clues' known placements
+                    let mut overlaps = false;
+                    for (other_idx, other_known) in known.iter().enumerate() {
+                        if other_idx != target_clue
+                            && cells.iter().any(|c| other_known.contains(c))
+                        {
+                            overlaps = true;
+                            break;
+                        }
+                    }
+                    if overlaps {
+                        continue;
+                    }
+
+                    // Set edges for all known placements + this trial placement
+                    let snap = self.changed.len();
+                    let mut all_cells: Vec<(usize, Vec<CellId>)> = Vec::new();
+                    for (ci, c) in known.iter().enumerate() {
+                        if ci == target_clue {
+                            all_cells.push((ci, cells.clone()));
+                        } else {
+                            all_cells.push((ci, c.iter().copied().collect()));
+                        }
+                    }
+                    let placed_set: HashSet<CellId> =
+                        all_cells.iter().flat_map(|(_, c)| c.iter().copied()).collect();
+                    for (_, cells) in &all_cells {
+                        for &cid in cells {
+                            for eid in self.grid.cell_edges(cid).into_iter().flatten() {
+                                let (c1, c2) = self.grid.edge_cells(eid);
+                                let other = if c1 == cid { c2 } else { c1 };
+                                if !self.grid.cell_exists[other] {
+                                    continue;
+                                }
+                                if placed_set.contains(&other)
+                                    && all_cells
+                                        .iter()
+                                        .any(|(_, c)| c.contains(&other))
+                                {
+                                    if self.edges[eid] == EdgeState::Unknown {
+                                        let _ = self.set_edge(eid, EdgeState::Uncut);
+                                    }
+                                } else if placed_set.contains(&other) {
+                                    if self.edges[eid] == EdgeState::Unknown {
+                                        let _ = self.set_edge(eid, EdgeState::Cut);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.curr_unknown = self
+                        .edges
+                        .iter()
+                        .filter(|&&e| e == EdgeState::Unknown)
+                        .count();
+                    if self.propagate().is_ok() {
+                        self.backtrack_edges();
+                    }
+                    self.restore(snap);
+                }
+            }
+        }
+    }
+
+    fn hybrid_backtrack(
+        &mut self,
+        order: &[usize],
+        groups: &[Vec<(usize, Vec<CellId>)>],
+        used: &mut Vec<bool>,
+        solution: &mut Vec<(usize, Vec<CellId>)>,
+    ) {
+        if self.solution_count >= 2 {
+            return;
+        }
+
+        let depth = solution.len();
+        if depth == order.len() {
+            // All clue pieces placed. Set edges, propagate, edge-search remaining cells.
+            let snap = self.changed.len();
+
+            // Build a set of placed cells for fast lookup
+            let placed_set: HashSet<CellId> =
+                solution.iter().flat_map(|(_, cells)| cells.iter().copied()).collect();
+
+            // Set edges: Uncut within each piece, Cut between pieces / placed vs unplaced
+            for (_, cells) in solution.iter() {
+                for &cid in cells {
+                    for eid in self.grid.cell_edges(cid).into_iter().flatten() {
+                        let (c1, c2) = self.grid.edge_cells(eid);
+                        let other = if c1 == cid { c2 } else { c1 };
+                        if !self.grid.cell_exists[other] {
+                            continue;
+                        }
+                        if placed_set.contains(&other) && cells.contains(&other) {
+                            // Same piece → Uncut
+                            if self.edges[eid] == EdgeState::Unknown {
+                                let _ = self.set_edge(eid, EdgeState::Uncut);
+                            }
+                        } else if placed_set.contains(&other) {
+                            // Different piece → Cut
+                            if self.edges[eid] == EdgeState::Unknown {
+                                let _ = self.set_edge(eid, EdgeState::Cut);
+                            }
+                        }
+                        // Unplaced cells: leave Unknown for edge-based search
+                    }
+                }
+            }
+
+            // Recount remaining unknowns and run edge-based search
+            self.curr_unknown = self
+                .edges
+                .iter()
+                .filter(|&&e| e == EdgeState::Unknown)
+                .count();
+
+            if self.propagate().is_ok() {
+                self.backtrack_edges();
+            }
+
+            self.restore(snap);
+            return;
+        }
+
+        let gi = order[depth];
+        let group = &groups[gi];
+
+        for (clue_idx, cells) in group {
+            if cells.iter().any(|&c| used[c]) {
+                continue;
+            }
+
+            // Quick adjacency check: size separation forbids same-size adjacent pieces
+            let area = cells.len();
+            let mut adj_ok = true;
+            let _cell_set: HashSet<CellId> = cells.iter().copied().collect();
+            for (prev_gi, prev_cells) in solution.iter() {
+                let prev_area = self.puzzle.cell_clues[*prev_gi]
+                    .cell_area()
+                    .unwrap_or(prev_cells.len());
+                if area == prev_area {
+                    // Check if any cell in current piece is adjacent to previous piece
+                    for &cid in cells {
+                        for eid in self.grid.cell_edges(cid).into_iter().flatten() {
+                            let (c1, c2) = self.grid.edge_cells(eid);
+                            let other = if c1 == cid { c2 } else { c1 };
+                            if self.grid.cell_exists[other] && prev_cells.contains(&other) {
+                                adj_ok = false;
+                                break;
+                            }
+                        }
+                        if !adj_ok {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !adj_ok {
+                continue;
+            }
+
+            // Mark used, recurse, unmark
+            for &c in cells {
+                used[c] = true;
+            }
+            solution.push((*clue_idx, cells.clone()));
+
+            self.hybrid_backtrack(order, groups, used, solution);
+
+            solution.pop();
+            for &c in cells {
+                used[c] = false;
+            }
+
+            if self.solution_count >= 2 {
+                return;
+            }
         }
     }
 

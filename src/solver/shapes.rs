@@ -167,6 +167,9 @@ impl Solver {
         let mut current = vec![start];
         let mut candidates = BTreeSet::new();
         for eid in self.grid.cell_edges(start).into_iter().flatten() {
+            if self.is_pre_cut[eid] {
+                continue;
+            }
             let (c1, c2) = self.grid.edge_cells(eid);
             let neighbor = if c1 == start { c2 } else { c1 };
             if self.grid.cell_exists[neighbor] && clue_at[neighbor].is_none() {
@@ -201,6 +204,9 @@ impl Solver {
 
             let mut added = Vec::new();
             for eid in self.grid.cell_edges(next).into_iter().flatten() {
+                if self.is_pre_cut[eid] {
+                    continue;
+                }
                 let (c1, c2) = self.grid.edge_cells(eid);
                 let neighbor = if c1 == next { c2 } else { c1 };
                 if self.grid.cell_exists[neighbor]
