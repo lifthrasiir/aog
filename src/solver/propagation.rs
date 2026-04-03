@@ -883,8 +883,12 @@ impl Solver {
                 comp_shape[ci] = Some(canonical(&polyomino::make_shape(&cells)));
             }
 
-            // Mingle shape: adjacent finished components must have the same shape
+            // Mingle shape: adjacent pieces must have the same canonical shape.
+            // When both sides are sealed, verify shapes match.
+            // When one side is sealed, propagate size constraint to the other side.
             if has_mingle {
+                let mut mingle_required_size: Vec<Option<usize>> = vec![None; num_comp];
+
                 for e in 0..self.grid.num_edges() {
                     if self.edges[e] != EdgeState::Cut {
                         continue;
@@ -898,9 +902,48 @@ impl Solver {
                     if ci1 == ci2 {
                         continue;
                     }
+
+                    // Both sides have known shapes: verify they match
                     match (&comp_shape[ci1], &comp_shape[ci2]) {
                         (Some(s1), Some(s2)) if s1 != s2 => return Err(()),
                         _ => {}
+                    }
+
+                    // One side sealed: propagate size constraint to the other
+                    let sealed1 = !self.can_grow_buf[ci1];
+                    let sealed2 = !self.can_grow_buf[ci2];
+                    if sealed1 && sealed2 {
+                        continue;
+                    }
+                    if !sealed1 && !sealed2 {
+                        continue;
+                    }
+
+                    let (sealed_ci, other_ci) =
+                        if sealed1 { (ci1, ci2) } else { (ci2, ci1) };
+                    let sealed_sz = self.curr_comp_sz[sealed_ci];
+
+                    // Check for conflicting mingle size requirements
+                    if let Some(prev) = mingle_required_size[other_ci] {
+                        if prev != sealed_sz {
+                            return Err(());
+                        }
+                    }
+                    mingle_required_size[other_ci] = Some(sealed_sz);
+
+                    // If other side has a target area, it must match
+                    if let Some(target) = self.curr_target_area[other_ci] {
+                        if target != sealed_sz {
+                            return Err(());
+                        }
+                        continue;
+                    }
+
+                    // No target on other side: check size compatibility.
+                    // Only return Err if the component CANNOT reach sealed_sz.
+                    let other_sz = self.curr_comp_sz[other_ci];
+                    if other_sz > sealed_sz {
+                        return Err(());
                     }
                 }
             }
@@ -1775,6 +1818,146 @@ mod tests {
         assert!(
             s.propagate_area_bounds().is_err(),
             "gemini: conflicting size requirements (1 vs 2) should be contradiction"
+        );
+    }
+
+    // === Mingle shape propagation tests ===
+
+    /// Helper: create a 2x2 solver with mingle_shape rule and Cut on v_edge(0,0).
+    fn make_mingle_solver_2x2() -> Solver {
+        let mut s = make_solver(
+            "\
++---+---+
+| _ . _ |
++ . + . +
+| _ . _ |
++---+---+
+",
+        );
+        s.puzzle.rules.mingle_shape = true;
+        let ge = s.grid.v_edge(0, 0);
+        let _ = s.set_edge(ge, EdgeState::Cut);
+        s
+    }
+
+    /// Helper: create a 2x3 solver with mingle_shape rule and Cuts on specified v_edge columns.
+    fn make_mingle_solver_2x3(cols: &[usize]) -> Solver {
+        let mut s = make_solver(
+            "\
++---+---+---+
+| _ . _ . _ |
++ . + . + . +
+| _ . _ . _ |
++---+---+---+
+",
+        );
+        s.puzzle.rules.mingle_shape = true;
+        for &c in cols {
+            let ge = s.grid.v_edge(0, c);
+            let _ = s.set_edge(ge, EdgeState::Cut);
+        }
+        s
+    }
+
+    #[test]
+    fn mingle_both_sealed_same_shape_ok() {
+        // Both sides are monominoes (sealed, same shape) → OK
+        let mut s = make_mingle_solver_2x2();
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        assert!(s.propagate_area_bounds().is_ok());
+    }
+
+    #[test]
+    fn mingle_both_sealed_different_shape_err() {
+        // Left: domino (0,0)+(1,0), Right: monomino (0,1). Different shapes → Err
+        let mut s = make_mingle_solver_2x2();
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Uncut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "mingle: domino vs monomino should be contradiction"
+        );
+    }
+
+    #[test]
+    fn mingle_one_sealed_size_exceeds_other_err() {
+        // Left: sealed monomino. Right: growing domino (size 2).
+        // sealed_sz=1, other_sz=2 > 1 → Err
+        let mut s = make_mingle_solver_2x2();
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Uncut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "mingle: sealed monomino (1) vs growing domino (2) should be contradiction"
+        );
+    }
+
+    #[test]
+    fn mingle_one_sealed_size_conflicts_target_err() {
+        // Left: sealed monomino (size 1). Right-top has area=3 clue → target 3 ≠ 1 → Err
+        let mut s = make_mingle_solver_2x2();
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+
+        let right_top = s.grid.cell_id(0, 1);
+        s.puzzle.cell_clues.push(CellClue::Area {
+            cell: right_top,
+            value: 3,
+        });
+        let nc = s.grid.num_cells();
+        s.cell_clues_indexed = vec![vec![]; nc];
+        for (i, clue) in s.puzzle.cell_clues.iter().enumerate() {
+            s.cell_clues_indexed[clue.cell()].push(i);
+        }
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "mingle: sealed size 1 vs target area 3 should be contradiction"
+        );
+    }
+
+    #[test]
+    fn mingle_sealed_same_size_no_force_cut() {
+        // Left-top sealed at 1. Mid-top at size 1 with growth edges.
+        // Should NOT force Cut on growth edges (same as gemini behavior).
+        let mut s = make_mingle_solver_2x3(&[0]);
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(0, 2), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.h_edge(0, 2), EdgeState::Cut);
+
+        assert!(s.propagate_area_bounds().is_ok());
+        assert_eq!(
+            s.edges[s.grid.h_edge(0, 1)],
+            EdgeState::Unknown,
+            "mingle: should not force Cut on growth edges for size-matched growing component"
+        );
+    }
+
+    #[test]
+    fn mingle_conflicting_sizes_from_two_edges_err() {
+        // Mid-top adjacent to two sealed components with different sizes via mingle → Err
+        let mut s = make_mingle_solver_2x3(&[0, 1]);
+        // Left: monomino (sealed at 1)
+        let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut);
+        // Right: domino (sealed at 2)
+        let _ = s.set_edge(s.grid.h_edge(0, 2), EdgeState::Uncut);
+        // Seal mid-top at 1: cut all its edges
+        let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut);
+        let _ = s.set_edge(s.grid.v_edge(1, 1), EdgeState::Cut);
+
+        assert!(
+            s.propagate_area_bounds().is_err(),
+            "mingle: conflicting size requirements (1 vs 2) should be contradiction"
         );
     }
 
