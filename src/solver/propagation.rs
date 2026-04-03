@@ -695,6 +695,81 @@ impl Solver {
             }
         }
 
+        // Diff clues: when one side is sealed, propagate target area to the other side
+        let mut diff_forced_cuts: Vec<EdgeId> = Vec::new();
+        for &(e, value) in &self.diff_clues {
+            if self.edges[e] != EdgeState::Cut {
+                continue;
+            }
+            let (c1, c2) = self.grid.edge_cells(e);
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                continue;
+            }
+            let ci1 = self.curr_comp_id[c1];
+            let ci2 = self.curr_comp_id[c2];
+            if ci1 == ci2 {
+                continue;
+            }
+            let sealed1 = !self.can_grow_buf[ci1];
+            let sealed2 = !self.can_grow_buf[ci2];
+            if sealed1 && sealed2 {
+                if self.curr_comp_sz[ci1].abs_diff(self.curr_comp_sz[ci2]) != value {
+                    return Err(());
+                }
+                continue;
+            }
+            let (sealed_ci, other_ci) = if sealed1 {
+                (ci1, ci2)
+            } else if sealed2 {
+                (ci2, ci1)
+            } else {
+                continue;
+            };
+            let sealed_sz = self.curr_comp_sz[sealed_ci];
+            let min_area = self.eff_min_area.max(1);
+            let max_area = self.eff_max_area;
+            let mut candidates: Vec<usize> = Vec::new();
+            candidates.push(sealed_sz + value);
+            if sealed_sz > value {
+                candidates.push(sealed_sz - value);
+            }
+            candidates.retain(|&a| a >= min_area && a <= max_area);
+            if candidates.is_empty() {
+                return Err(());
+            }
+            if let Some(existing) = self.curr_target_area[other_ci] {
+                if !candidates.contains(&existing) {
+                    return Err(());
+                }
+                continue;
+            }
+            if candidates.len() == 1 {
+                let new_target = candidates[0];
+                if self.curr_comp_sz[other_ci] > new_target {
+                    return Err(());
+                }
+                self.curr_target_area[other_ci] = Some(new_target);
+                // Only seal growth edges if the component is already at the target.
+                // Do NOT set progress = true here — curr_target_area is recomputed
+                // each call, so this is not a persistent state change.
+                if self.curr_comp_sz[other_ci] == new_target {
+                    for &ge in &growth_edges[other_ci] {
+                        if self.edges[ge] == EdgeState::Unknown {
+                            diff_forced_cuts.push(ge);
+                        }
+                    }
+                }
+            }
+        }
+        for &ge in &diff_forced_cuts {
+            if self.edges[ge] == EdgeState::Unknown {
+                if !self.set_edge(ge, EdgeState::Cut) {
+                    return Err(());
+                }
+                progress = true;
+            }
+        }
+
         // Size separation: adjacent finished components must have different sizes
         if self.puzzle.rules.size_separation {
             for e in 0..self.grid.num_edges() {

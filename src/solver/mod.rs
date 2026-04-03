@@ -55,6 +55,8 @@ pub struct Solver {
     // Cached from last propagate_area_bounds() for edge selection heuristic
     pub(crate) cached_sealed_neighbor_sizes: Option<Vec<HashSet<usize>>>,
     pub(crate) cached_growth_edge_count: Vec<usize>,
+    // Pre-extracted diff clues: (edge_id, value)
+    pub(crate) diff_clues: Vec<(EdgeId, usize)>,
 }
 
 impl Solver {
@@ -69,6 +71,18 @@ impl Solver {
             cell_clues_indexed[c].push(i);
             has_any_clue[c] = true;
         }
+
+        let diff_clues: Vec<(EdgeId, usize)> = puzzle
+            .edge_clues
+            .iter()
+            .filter_map(|cl| {
+                if let EdgeClueKind::Diff { value } = cl.kind {
+                    Some((cl.edge, value))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         Self {
             puzzle,
@@ -103,6 +117,7 @@ impl Solver {
             same_area_groups: false,
             cached_sealed_neighbor_sizes: None,
             cached_growth_edge_count: Vec::new(),
+            diff_clues,
         }
     }
 
