@@ -5,6 +5,9 @@ mod match_solver;
 mod pieces;
 mod progress;
 mod propagation;
+mod prop_area;
+mod prop_palisade;
+mod prop_watchtower;
 pub(crate) mod shapes;
 mod validation;
 
@@ -63,6 +66,10 @@ pub struct Solver {
     pub(crate) watchtower_vertices: HashSet<VertexId>,
     // Bitset of rose window symbols present in the puzzle (bit i = symbol i exists)
     pub(crate) rose_bits_all: u8,
+    // Cells per component (populated by build_components, used by sub-propagators)
+    pub(crate) comp_cells: Vec<Vec<CellId>>,
+    // Growth edges per component (populated by build_components)
+    pub(crate) growth_edges: Vec<Vec<EdgeId>>,
 }
 
 impl Solver {
@@ -146,6 +153,8 @@ impl Solver {
             clue_cut_edges,
             watchtower_vertices,
             rose_bits_all,
+            comp_cells: Vec::new(),
+            growth_edges: Vec::new(),
         }
     }
 
