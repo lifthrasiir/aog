@@ -9,6 +9,7 @@ impl Solver {
             if self.puzzle.rules.bricky || self.puzzle.rules.loopy {
                 progress |= self.propagate_bricky_loopy()?;
             }
+            progress |= self.propagate_delta_gemini_interaction()?;
             progress |= self.propagate_area_bounds()?;
             progress |= self.propagate_rose_separation()?;
             progress |= self.propagate_same_area_reachability()?;
@@ -91,15 +92,6 @@ impl Solver {
         Ok(forced > 0)
     }
 
-    /// Multi-round probing (standalone, for initial solve phase).
-    /// Calls propagate() internally which includes integrated probing,
-    /// so this is equivalent to just running propagate() with the
-    /// probing threshold already handled.
-    pub(crate) fn probe_edges(&mut self) -> Result<(), ()> {
-        // Just run propagate; the integrated probing handles everything
-        self.propagate().map(|_| ())
-    }
-
     pub(crate) fn propagate_bricky_loopy(&mut self) -> Result<bool, ()> {
         let mut progress = false;
         for i in 1..self.grid.rows {
@@ -129,6 +121,96 @@ impl Solver {
                 }
             }
         }
+        Ok(progress)
+    }
+
+    /// Geometric interaction between Gemini and Delta clues at a vertex.
+    ///
+    /// If a Gemini edge and a Delta edge (both same orientation) meet at a vertex,
+    /// the two orthogonal edges at that vertex cannot BOTH be Uncut, because that
+    /// would merge the pieces on both sides, requiring Shape(L) == Shape(R)
+    /// (Gemini) and Shape(L) != Shape(R) (Delta) simultaneously.
+    ///
+    /// If Bricky rule is on, they also cannot BOTH be Cut (as clues are already Cut).
+    pub(crate) fn propagate_delta_gemini_interaction(&mut self) -> Result<bool, ()> {
+        let mut progress = false;
+        let mut edge_kinds = vec![None; self.grid.num_edges()];
+        for clue in &self.puzzle.edge_clues {
+            edge_kinds[clue.edge] = Some(clue.kind);
+        }
+
+        for r in 0..=self.grid.rows {
+            for c in 0..=self.grid.cols {
+                let [h_up, h_down, v_left, v_right] = self.grid.vertex_edges(r, c);
+
+                // Case 1: Gemini/Delta on vertical stack (h_up, h_down)
+                // Note: h_edge is a HORIZONTAL line, but h_up/h_down form a VERTICAL stack.
+                if let (Some(e1), Some(e2)) = (h_up, h_down) {
+                    if matches!((edge_kinds[e1], edge_kinds[e2]),
+                        (Some(EdgeClueKind::Gemini), Some(EdgeClueKind::Delta)) |
+                        (Some(EdgeClueKind::Delta), Some(EdgeClueKind::Gemini)))
+                    {
+                        if let (Some(t1), Some(t2)) = (v_left, v_right) {
+                            progress |= self.propagate_transverse_pair(t1, t2)?;
+                        }
+                    }
+                }
+
+                // Case 2: Gemini/Delta on horizontal stack (v_left, v_right)
+                // Note: v_edge is a VERTICAL line, but v_left/v_right form a HORIZONTAL stack.
+                if let (Some(e1), Some(e2)) = (v_left, v_right) {
+                    if matches!((edge_kinds[e1], edge_kinds[e2]),
+                        (Some(EdgeClueKind::Gemini), Some(EdgeClueKind::Delta)) |
+                        (Some(EdgeClueKind::Delta), Some(EdgeClueKind::Gemini)))
+                    {
+                        if let (Some(t1), Some(t2)) = (h_up, h_down) {
+                            progress |= self.propagate_transverse_pair(t1, t2)?;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(progress)
+    }
+
+    fn propagate_transverse_pair(&mut self, e1: EdgeId, e2: EdgeId) -> Result<bool, ()> {
+        let mut progress = false;
+        let s1 = self.edges[e1];
+        let s2 = self.edges[e2];
+
+        // 1. Cannot both be Uncut
+        if s1 == EdgeState::Uncut && s2 == EdgeState::Uncut {
+            return Err(());
+        }
+        if s1 == EdgeState::Uncut && s2 == EdgeState::Unknown {
+            if self.set_edge(e2, EdgeState::Cut) {
+                progress = true;
+            }
+        }
+        if s2 == EdgeState::Uncut && s1 == EdgeState::Unknown {
+            if self.set_edge(e1, EdgeState::Cut) {
+                progress = true;
+            }
+        }
+
+        // 2. If Bricky, cannot both be Cut
+        if self.puzzle.rules.bricky {
+            if s1 == EdgeState::Cut && s2 == EdgeState::Cut {
+                return Err(());
+            }
+            if s1 == EdgeState::Cut && s2 == EdgeState::Unknown {
+                if self.set_edge(e2, EdgeState::Uncut) {
+                    progress = true;
+                }
+            }
+            if s2 == EdgeState::Cut && s1 == EdgeState::Unknown {
+                if self.set_edge(e1, EdgeState::Uncut) {
+                    progress = true;
+                }
+            }
+        }
+
         Ok(progress)
     }
 }
@@ -164,5 +246,98 @@ mod tests {
             result.is_err(),
             "bricky: 4 cut edges at vertex should be contradiction"
         );
+    }
+
+    #[test]
+    fn propagate_delta_gemini_v_stack_forces_cut() {
+        let mut s = make_solver(
+            "\
++---+---+---+
+| _ . _ . _ |
++ . + . + . +
+| _ . + . _ |
++ . + . + . +
+| _ . _ . _ |
++---+---+---+
+",
+        );
+        // Vertex (1, 1): h_up=H(0, 1), h_down=H(1, 1), v_left=V(1, 0), v_right=V(1, 1)
+        let h_up = s.grid.h_edge(0, 1);
+        let h_down = s.grid.h_edge(1, 1);
+        s.puzzle.edge_clues.push(EdgeClue { edge: h_up, kind: EdgeClueKind::Gemini });
+        s.puzzle.edge_clues.push(EdgeClue { edge: h_down, kind: EdgeClueKind::Delta });
+        s.edges[h_up] = EdgeState::Cut;
+        s.edges[h_down] = EdgeState::Cut;
+
+        let v_left = s.grid.v_edge(1, 0);
+        let v_right = s.grid.v_edge(1, 1);
+        let _ = s.set_edge(v_left, EdgeState::Uncut);
+
+        let result = s.propagate_delta_gemini_interaction();
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        assert_eq!(s.edges[v_right], EdgeState::Cut);
+    }
+
+    #[test]
+    fn propagate_delta_gemini_v_stack_bricky_forces_uncut() {
+        let mut s = make_solver(
+            "\
++---+---+---+
+| _ . _ . _ |
++ . + . + . +
+| _ . + . _ |
++ . + . + . +
+| _ . _ . _ |
++---+---+---+
+",
+        );
+        s.puzzle.rules.bricky = true;
+        let h_up = s.grid.h_edge(0, 1);
+        let h_down = s.grid.h_edge(1, 1);
+        s.puzzle.edge_clues.push(EdgeClue { edge: h_up, kind: EdgeClueKind::Gemini });
+        s.puzzle.edge_clues.push(EdgeClue { edge: h_down, kind: EdgeClueKind::Delta });
+        s.edges[h_up] = EdgeState::Cut;
+        s.edges[h_down] = EdgeState::Cut;
+
+        let v_left = s.grid.v_edge(1, 0);
+        let v_right = s.grid.v_edge(1, 1);
+        let _ = s.set_edge(v_left, EdgeState::Cut);
+
+        let result = s.propagate_delta_gemini_interaction();
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        assert_eq!(s.edges[v_right], EdgeState::Uncut);
+    }
+
+    #[test]
+    fn propagate_delta_gemini_h_stack_forces_cut() {
+        let mut s = make_solver(
+            "\
++---+---+---+
+| _ . _ . _ |
++ . + . + . +
+| _ . + . _ |
++ . + . + . +
+| _ . _ . _ |
++---+---+---+
+",
+        );
+        // Vertex (1, 1): v_left=V(1, 0), v_right=V(1, 1)
+        let v_left = s.grid.v_edge(1, 0);
+        let v_right = s.grid.v_edge(1, 1);
+        s.puzzle.edge_clues.push(EdgeClue { edge: v_left, kind: EdgeClueKind::Gemini });
+        s.puzzle.edge_clues.push(EdgeClue { edge: v_right, kind: EdgeClueKind::Delta });
+        s.edges[v_left] = EdgeState::Cut;
+        s.edges[v_right] = EdgeState::Cut;
+
+        let h_up = s.grid.h_edge(0, 1);
+        let h_down = s.grid.h_edge(1, 1);
+        let _ = s.set_edge(h_up, EdgeState::Uncut);
+
+        let result = s.propagate_delta_gemini_interaction();
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        assert_eq!(s.edges[h_down], EdgeState::Cut);
     }
 }

@@ -115,22 +115,22 @@ impl Grid {
     /// 4 edges adjacent to vertex (i,j), None if boundary
     pub fn vertex_edges(&self, i: usize, j: usize) -> [Option<EdgeId>; 4] {
         [
-            if i >= 1 && i < self.rows {
+            if i >= 1 && i < self.rows && j < self.cols {
                 Some(self.h_edge(i - 1, j))
             } else {
                 None
             },
-            if i < self.rows - 1 {
+            if i < self.rows - 1 && j < self.cols {
                 Some(self.h_edge(i, j))
             } else {
                 None
             },
-            if j >= 1 && j < self.cols {
+            if j >= 1 && j < self.cols && i < self.rows {
                 Some(self.v_edge(i, j - 1))
             } else {
                 None
             },
-            if j < self.cols - 1 {
+            if j < self.cols - 1 && i < self.rows {
                 Some(self.v_edge(i, j))
             } else {
                 None
