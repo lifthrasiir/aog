@@ -10,6 +10,7 @@ impl Solver {
                 progress |= self.propagate_bricky_loopy()?;
             }
             progress |= self.propagate_area_bounds()?;
+            progress |= self.propagate_rose_separation()?;
             progress |= self.propagate_same_area_reachability()?;
             progress |= self.propagate_palisade_constraints()?;
             progress |= self.propagate_compass()?;

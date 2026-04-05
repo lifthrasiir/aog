@@ -66,6 +66,10 @@ pub struct Solver {
     pub(crate) watchtower_vertices: HashSet<VertexId>,
     // Bitset of rose window symbols present in the puzzle (bit i = symbol i exists)
     pub(crate) rose_bits_all: u8,
+    // Pre-computed rose symbol per cell (0xff = no rose symbol, static)
+    pub(crate) cell_rose_sym: Vec<u8>,
+    // Reusable BFS buffers for rose propagation
+    pub(crate) rose_visited: Vec<bool>,
     // Cells per component (populated by build_components, used by sub-propagators)
     pub(crate) comp_cells: Vec<Vec<CellId>>,
     // Growth edges per component (populated by build_components)
@@ -116,6 +120,22 @@ impl Solver {
             }
         }
 
+        // Pre-compute rose symbol per cell (0xff = no rose symbol)
+        let mut cell_rose_sym = vec![0xffu8; nc];
+        for c in 0..nc {
+            if !grid.cell_exists[c] {
+                continue;
+            }
+            for &clue_idx in &cell_clues_indexed[c] {
+                if let CellClue::Rose { symbol, .. } = &puzzle.cell_clues[clue_idx] {
+                    cell_rose_sym[c] = *symbol;
+                    break;
+                }
+            }
+        }
+
+        let rose_visited = vec![false; nc];
+
         Self {
             puzzle,
             grid,
@@ -153,6 +173,8 @@ impl Solver {
             clue_cut_edges,
             watchtower_vertices,
             rose_bits_all,
+            cell_rose_sym,
+            rose_visited,
             comp_cells: Vec::new(),
             growth_edges: Vec::new(),
         }
