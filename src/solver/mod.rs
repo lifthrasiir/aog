@@ -54,6 +54,7 @@ pub struct Solver {
     pub(crate) curr_target_area: Vec<Option<usize>>,
     // Reusable buffers for propagation
     pub(crate) comp_buf: Vec<usize>,
+    pub(crate) comp_buf2: Vec<usize>,
     pub(crate) q_buf: Vec<usize>,
     pub(crate) can_grow_buf: Vec<bool>,
     // Dedup for match coupled solver: tracks seen piece1 cell sets
@@ -87,6 +88,9 @@ pub struct Solver {
     pub(crate) growth_edges: Vec<Vec<EdgeId>>,
     // Recursion guard: prevents probing from running inside a probe's propagation
     pub(crate) in_probing: bool,
+    // Pre-computed clue presence flags (set once in new())
+    pub(crate) has_palisade_clue: bool,
+    pub(crate) has_compass_clue: bool,
     // Cell-pair constraint layer (None if no rose symbols)
     pub(crate) pair_layer: Option<pair::CellPairLayer>,
     // Reusable BFS buffer for path-finding (pair branching)
@@ -150,6 +154,15 @@ impl Solver {
 
         let rose_visited = vec![false; nc];
 
+        let has_palisade_clue = puzzle
+            .cell_clues
+            .iter()
+            .any(|c| matches!(c, CellClue::Palisade { .. }));
+        let has_compass_clue = puzzle
+            .cell_clues
+            .iter()
+            .any(|c| matches!(c, CellClue::Compass { .. }));
+
         Self {
             puzzle,
             grid,
@@ -174,6 +187,7 @@ impl Solver {
             curr_comp_sz: Vec::new(),
             curr_target_area: Vec::new(),
             comp_buf: vec![usize::MAX; nc],
+            comp_buf2: Vec::new(),
             q_buf: Vec::with_capacity(nc),
             can_grow_buf: Vec::new(),
             seen_partitions: HashSet::new(),
@@ -192,6 +206,8 @@ impl Solver {
             comp_cells: Vec::new(),
             growth_edges: Vec::new(),
             in_probing: false,
+            has_palisade_clue,
+            has_compass_clue,
             pair_layer: None,
             bfs_prev: Vec::new(),
             manual_diffs: Vec::new(),

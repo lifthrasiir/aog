@@ -45,7 +45,9 @@ impl Solver {
         // but we can just use a small array for mapping if we want to be super fast,
         // or just use the fact that comp_buf[c] is the representative cell.
         // Let's use a temporary mapping array to keep IDs contiguous.
-        let mut id_map = vec![usize::MAX; n];
+        self.comp_buf2.clear();
+        self.comp_buf2.resize(n, usize::MAX);
+        let id_map = &mut self.comp_buf2[..n];
         for c in 0..n {
             if !self.grid.cell_exists[c] {
                 continue;
@@ -66,7 +68,14 @@ impl Solver {
 
         self.curr_comp_sz.clear();
         self.curr_comp_sz.resize(num_comp, 0);
-        self.comp_cells = vec![Vec::new(); num_comp];
+        // Reuse comp_cells allocations
+        self.comp_cells.truncate(num_comp);
+        for v in &mut self.comp_cells {
+            v.clear();
+        }
+        while self.comp_cells.len() < num_comp {
+            self.comp_cells.push(Vec::new());
+        }
         let mut comp_clues = vec![Vec::new(); num_comp]; // This one is still a bit heavy, but clues are few
         let mut comp_rose: Vec<u8> = vec![0u8; num_comp];
         for c in 0..n {
@@ -121,7 +130,14 @@ impl Solver {
         // Check Unknown edges to outside
         self.can_grow_buf.clear();
         self.can_grow_buf.resize(num_comp, false);
-        self.growth_edges = vec![Vec::new(); num_comp];
+        // Reuse growth_edges allocations
+        self.growth_edges.truncate(num_comp);
+        for v in &mut self.growth_edges {
+            v.clear();
+        }
+        while self.growth_edges.len() < num_comp {
+            self.growth_edges.push(Vec::new());
+        }
         let mut same_area_forced_uncuts: Vec<EdgeId> = Vec::new();
 
         for e in 0..self.grid.num_edges() {

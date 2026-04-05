@@ -9,19 +9,27 @@ impl Solver {
             if self.puzzle.rules.bricky || self.puzzle.rules.loopy {
                 progress |= self.propagate_bricky_loopy()?;
             }
-            progress |= self.propagate_delta_gemini_interaction()?;
+            if !self.puzzle.edge_clues.is_empty() {
+                progress |= self.propagate_delta_gemini_interaction()?;
+            }
             progress |= self.propagate_area_bounds()?;
             progress |= self.propagate_rose_separation()?;
             progress |= self.propagate_rose_phase3()?;
-            progress |= self.propagate_same_area_reachability()?;
-            progress |= self.propagate_palisade_constraints()?;
-            progress |= self.propagate_compass()?;
+            if self.same_area_groups {
+                progress |= self.propagate_same_area_reachability()?;
+            }
+            if self.has_palisade_clue {
+                progress |= self.propagate_palisade_constraints()?;
+            }
+            if self.has_compass_clue {
+                progress |= self.propagate_compass()?;
+            }
             progress |= self.propagate_watchtower()?;
 
             if !progress {
                 // Failed literal detection (probing): probe each unknown edge
-                // to see if one value causes contradiction. Uses recursion guard
-                // to prevent infinite loop when called from within a probe.
+                // to see if one value causes contradiction. in_probing guard
+                // prevents recursion when called from within a probe.
                 if !self.in_probing
                     && self.rose_bits_all != 0
                     && self.curr_unknown > 0
@@ -43,8 +51,8 @@ impl Solver {
     /// Single round of failed literal detection: for each unknown edge,
     /// temporarily assign Cut and Uncut, run propagation, and if one causes
     /// contradiction, force the opposite value.
+    /// Returns early on first force to let the outer loop cascade.
     fn probe_one_round(&mut self) -> Result<bool, ()> {
-        let mut forced = 0usize;
         let num_edges = self.grid.num_edges();
 
         for e in 0..num_edges {
@@ -58,10 +66,9 @@ impl Solver {
             self.restore(snap);
 
             if !cut_ok {
-                // Cut contradicts → force Uncut
+                // Cut contradicts -> force Uncut
                 if self.edges[e] == EdgeState::Unknown && self.set_edge(e, EdgeState::Uncut) {
-                    forced += 1;
-                    // Don't recurse here; let the outer loop handle it
+                    return Ok(true);
                 }
                 continue;
             }
@@ -76,15 +83,14 @@ impl Solver {
             self.restore(snap);
 
             if !uncut_ok {
-                // Uncut contradicts → force Cut
+                // Uncut contradicts -> force Cut
                 if self.edges[e] == EdgeState::Unknown && self.set_edge(e, EdgeState::Cut) {
-                    forced += 1;
-                    // Don't recurse here; let the outer loop handle it
+                    return Ok(true);
                 }
             }
         }
 
-        Ok(forced > 0)
+        Ok(false)
     }
 
     pub(crate) fn propagate_bricky_loopy(&mut self) -> Result<bool, ()> {

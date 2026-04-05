@@ -20,7 +20,7 @@
     | _ . _ . _ . _ . _ . _ . _ . _ . _ |
     +---+---+---+---+---+---+---+---+---+
 
-# unique solution (~70s to first solution, ~500s for uniqueness check; skip):
+# unique solution (~10s to first solution, ~60s for uniqueness check; skip):
 #
 #     +---+---+---+---+---+---+---+---+---+
 #     | 1   1   1   1   1   1   1   1   1 |
