@@ -176,18 +176,18 @@ impl Solver {
                 let limit2 = self.curr_target_area[ci2].unwrap_or(self.eff_max_area);
 
                 if (self.curr_comp_sz[ci1] >= limit1 || self.curr_comp_sz[ci2] >= limit2)
-                    && !self.set_edge(e, EdgeState::Cut) {
-                        return Err(());
-                    }
+                    && !self.set_edge(e, EdgeState::Cut)
+                {
+                    return Err(());
+                }
             }
         }
 
         // Apply same-area forced Uncuts (collected above to avoid stale component state)
         for &e in &same_area_forced_uncuts {
-            if self.edges[e] == EdgeState::Unknown
-                && !self.set_edge(e, EdgeState::Uncut) {
-                    return Err(());
-                }
+            if self.edges[e] == EdgeState::Unknown && !self.set_edge(e, EdgeState::Uncut) {
+                return Err(());
+            }
         }
 
         // === Rose window propagation ===
@@ -248,10 +248,9 @@ impl Solver {
             }
 
             for &e in &rose_cut_set {
-                if self.edges[e] == EdgeState::Unknown
-                    && !self.set_edge(e, EdgeState::Cut) {
-                        return Err(());
-                    }
+                if self.edges[e] == EdgeState::Unknown && !self.set_edge(e, EdgeState::Cut) {
+                    return Err(());
+                }
             }
         }
         Ok(num_comp)

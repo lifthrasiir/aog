@@ -27,13 +27,8 @@ impl Solver {
         if !self.puzzle.rules.shape_bank.is_empty() || total_clue_area == self.total_cells {
             if !self.puzzle.rules.shape_bank.is_empty() {
                 self.prepare_shape_transforms();
-                self.shape_bank_canonicals = self
-                    .puzzle
-                    .rules
-                    .shape_bank
-                    .iter()
-                    .map(canonical)
-                    .collect();
+                self.shape_bank_canonicals =
+                    self.puzzle.rules.shape_bank.iter().map(canonical).collect();
             }
             self.backtrack_pieces();
         } else if total_clue_area > 0 && self.should_try_hybrid(total_clue_area) {
@@ -138,7 +133,7 @@ impl Solver {
                     }
 
                     // Set edges for all known placements + this trial placement
-                    let snap = self.changed.len();
+                    let snap = self.snapshot();
                     let mut all_cells: Vec<(usize, Vec<CellId>)> = Vec::new();
                     for (ci, c) in known.iter().enumerate() {
                         if ci == target_clue {
@@ -166,9 +161,10 @@ impl Solver {
                                         let _ = self.set_edge(eid, EdgeState::Uncut);
                                     }
                                 } else if placed_set.contains(&other)
-                                    && self.edges[eid] == EdgeState::Unknown {
-                                        let _ = self.set_edge(eid, EdgeState::Cut);
-                                    }
+                                    && self.edges[eid] == EdgeState::Unknown
+                                {
+                                    let _ = self.set_edge(eid, EdgeState::Cut);
+                                }
                             }
                         }
                     }
@@ -200,7 +196,7 @@ impl Solver {
         let depth = solution.len();
         if depth == order.len() {
             // All clue pieces placed. Set edges, propagate, edge-search remaining cells.
-            let snap = self.changed.len();
+            let snap = self.snapshot();
 
             // Build a set of placed cells for fast lookup
             let placed_set: HashSet<CellId> = solution

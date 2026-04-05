@@ -13,7 +13,7 @@ impl Solver {
         self.rose_visited[start] = true;
         self.q_buf.clear();
         self.q_buf.push(start);
-        if sym[start] != 0xff {
+        if sym[start] != u8::MAX {
             types |= 1 << sym[start];
         }
 
@@ -28,14 +28,14 @@ impl Solver {
                     continue;
                 }
                 if exclude_rose_mask != 0
-                    && sym[other] != 0xff
+                    && sym[other] != u8::MAX
                     && (exclude_rose_mask & (1 << sym[other])) != 0
                 {
                     continue;
                 }
                 self.rose_visited[other] = true;
                 self.q_buf.push(other);
-                if sym[other] != 0xff {
+                if sym[other] != u8::MAX {
                     types |= 1 << sym[other];
                 }
             }
@@ -58,7 +58,7 @@ impl Solver {
             self.rose_visited[c] = true;
             self.q_buf.push(c);
             cells.push(c);
-            if sym[c] != 0xff {
+            if sym[c] != u8::MAX {
                 types |= 1 << sym[c];
             }
         }
@@ -74,7 +74,7 @@ impl Solver {
                     continue;
                 }
                 if exclude_rose_mask != 0
-                    && sym[other] != 0xff
+                    && sym[other] != u8::MAX
                     && (exclude_rose_mask & (1 << sym[other])) != 0
                 {
                     continue;
@@ -82,7 +82,7 @@ impl Solver {
                 self.rose_visited[other] = true;
                 self.q_buf.push(other);
                 cells.push(other);
-                if sym[other] != 0xff {
+                if sym[other] != u8::MAX {
                     types |= 1 << sym[other];
                 }
             }
@@ -105,7 +105,7 @@ impl Solver {
         for &c in &self.comp_cells[ci] {
             self.rose_visited[c] = true;
             self.q_buf.push(c);
-            if sym[c] != 0xff {
+            if sym[c] != u8::MAX {
                 types |= 1 << sym[c];
             }
         }
@@ -122,14 +122,14 @@ impl Solver {
                 }
                 // Skip cells whose rose symbol is in the exclusion mask
                 if exclude_rose_mask != 0
-                    && sym[other] != 0xff
+                    && sym[other] != u8::MAX
                     && (exclude_rose_mask & (1 << sym[other])) != 0
                 {
                     continue;
                 }
                 self.rose_visited[other] = true;
                 self.q_buf.push(other);
-                if sym[other] != 0xff {
+                if sym[other] != u8::MAX {
                     types |= 1 << sym[other];
                 }
             }
@@ -156,7 +156,7 @@ impl Solver {
         for &c in &self.comp_cells[ci] {
             self.rose_visited[c] = true;
             self.q_buf.push(c);
-            if sym[c] != 0xff {
+            if sym[c] != u8::MAX {
                 types |= 1 << sym[c];
             }
         }
@@ -172,14 +172,14 @@ impl Solver {
                     continue;
                 }
                 if exclude_rose_mask != 0
-                    && sym[other] != 0xff
+                    && sym[other] != u8::MAX
                     && (exclude_rose_mask & (1 << sym[other])) != 0
                 {
                     continue;
                 }
                 self.rose_visited[other] = true;
                 self.q_buf.push(other);
-                if sym[other] != 0xff {
+                if sym[other] != u8::MAX {
                     types |= 1 << sym[other];
                 }
             }
@@ -205,7 +205,7 @@ impl Solver {
                 continue;
             }
             for &c in &self.comp_cells[ci] {
-                if self.cell_rose_sym[c] != 0xff {
+                if self.cell_rose_sym[c] != u8::MAX {
                     any_rose_comp = true;
                     break;
                 }
@@ -227,7 +227,7 @@ impl Solver {
             let mut comp_rose: u8 = 0;
             for &c in &self.comp_cells[ci] {
                 let sym = self.cell_rose_sym[c];
-                if sym != 0xff {
+                if sym != u8::MAX {
                     comp_rose |= 1 << sym;
                 }
             }
@@ -267,7 +267,7 @@ impl Solver {
             let mut comp_rose: u8 = 0;
             for &c in &self.comp_cells[ci] {
                 let sym = self.cell_rose_sym[c];
-                if sym != 0xff {
+                if sym != u8::MAX {
                     comp_rose |= 1 << sym;
                 }
             }
@@ -354,7 +354,16 @@ impl Solver {
             }
         }
 
-        // --- Phase 3: All-types complete component rose blocking ---
+        Ok(false)
+    }
+
+    // --- Phase 3: All-types complete component rose blocking ---
+    pub(crate) fn propagate_rose_phase3(&mut self) -> Result<bool, ()> {
+        if self.curr_comp_id.is_empty() {
+            return Ok(false);
+        }
+        let num_comp = self.curr_comp_sz.len();
+
         for ci in 0..num_comp {
             if !self.can_grow_buf[ci] {
                 continue;
@@ -363,7 +372,7 @@ impl Solver {
             let mut comp_rose: u8 = 0;
             for &c in &self.comp_cells[ci] {
                 let sym = self.cell_rose_sym[c];
-                if sym != 0xff {
+                if sym != u8::MAX {
                     comp_rose |= 1 << sym;
                 }
             }
@@ -387,7 +396,7 @@ impl Solver {
                     continue;
                 }
                 // Check if neighbor has a rose symbol
-                if self.cell_rose_sym[other] != 0xff {
+                if self.cell_rose_sym[other] != u8::MAX {
                     if !self.set_edge(e, EdgeState::Cut) {
                         return Err(());
                     }

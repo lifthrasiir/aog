@@ -2,12 +2,12 @@ use super::Solver;
 use crate::types::*;
 
 impl Solver {
-    fn select_edge(&self) -> Option<EdgeId> {
+    fn select_edge(&self) -> Option<(EdgeId, i32)> {
         let num_edges = self.grid.num_edges();
         if self.curr_comp_id.is_empty() {
             for e in 0..num_edges {
                 if self.edges[e] == EdgeState::Unknown {
-                    return Some(e);
+                    return Some((e, 0));
                 }
             }
             return None;
@@ -97,10 +97,9 @@ impl Solver {
 
             // Bonus: edge adjacent to a clue-constrained component
             // (component touching a gemini/delta/inequality/diff edge)
-            if has_clue_edges
-                && (clue_constrained_comp[ci1] || clue_constrained_comp[ci2]) {
-                    score += 30;
-                }
+            if has_clue_edges && (clue_constrained_comp[ci1] || clue_constrained_comp[ci2]) {
+                score += 30;
+            }
 
             // Bonus: edge incident to a watchtower vertex
             if !self.watchtower_vertices.is_empty() {
@@ -154,7 +153,7 @@ impl Solver {
 
             if score > best_score {
                 best_score = score;
-                best_e = Some(e);
+                best_e = Some((e, score));
                 if score >= 200 {
                     break;
                 }
@@ -238,11 +237,22 @@ impl Solver {
             return;
         }
 
-        let e = match self.select_edge() {
-            Some(e) => e,
+        // Edge selection
+        let (e, best_edge_score) = match self.select_edge() {
+            Some((e, score)) => (e, score),
             None => return,
         };
 
+        // Pair branching: for rose puzzles, try branching on cell pairs
+        // before falling back to edge branching.
+        if self.rose_bits_all != 0 && self.pair_layer.is_some() && self.curr_unknown <= 80 {
+            if let Some((c1, c2)) = self.select_rose_pair(best_edge_score) {
+                self.branch_on_pair(c1, c2);
+                return;
+            }
+        }
+
+        // Edge branching
         let cut_first = self.prefer_cut_first(e);
         let order: &[EdgeState; 2] = if cut_first {
             &[EdgeState::Cut, EdgeState::Uncut]
@@ -251,7 +261,7 @@ impl Solver {
         };
 
         for &val in order {
-            let snap = self.changed.len();
+            let snap = self.snapshot();
             if !self.set_edge(e, val) {
                 continue;
             }

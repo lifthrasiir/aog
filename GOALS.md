@@ -14,7 +14,7 @@ Possible global puzzle rules (can be combined):
 - loopy: No boundary vertex may be in contact with exactly 3 split edges---i.e., no T-shaped junctions are allowed.
 
 Possible cell clues (at most one per cell; no duplicates of the same type):
-- rose window (A~E): Up to 5 symbol types may appear on cells. If symbol X appears anywhere in the puzzle, then every piece in the solution must contain exactly one cell with symbol X.
+- rose window (A~E): Up to 5 symbol types may appear on cells. If symbol X appears anywhere in the puzzle, then every piece in the solution must contain exactly one cell with symbol X. (Therefore there can be no piece without that symbol X.)
 - polyomino: A connected polyomino shape is drawn on the cell.
 - palisade: Indicates for each edge surrounding the cell whether it is split or not. Rotation is allowed, giving the following possibilities: none split (p0), one direction split (p1), two opposite directions split (p=), two adjacent directions split (p2), three directions split (p3), all four directions split (p4).
 - area number (1 2 3 ...): Indicates the area (cell count) of the piece containing this cell.

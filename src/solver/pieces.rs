@@ -31,10 +31,12 @@ impl Solver {
             for eid in self.grid.cell_edges(cid).into_iter().flatten() {
                 let (c1, c2) = self.grid.edge_cells(eid);
                 let other = if c1 == cid { c2 } else { c1 };
-                if other > cid && cell_set.contains(&other)
-                    && (self.is_pre_cut[eid] || self.edges[eid] == EdgeState::Cut) {
-                        return false;
-                    }
+                if other > cid
+                    && cell_set.contains(&other)
+                    && (self.is_pre_cut[eid] || self.edges[eid] == EdgeState::Cut)
+                {
+                    return false;
+                }
             }
         }
         true
@@ -47,9 +49,10 @@ impl Solver {
                 let (c1, c2) = self.grid.edge_cells(eid);
                 let other = if c1 == cid { c2 } else { c1 };
                 if (!self.grid.cell_exists[other] || cells.binary_search(&other).is_err())
-                    && self.edges[eid] == EdgeState::Uncut {
-                        return false;
-                    }
+                    && self.edges[eid] == EdgeState::Uncut
+                {
+                    return false;
+                }
             }
         }
         true
@@ -304,7 +307,7 @@ impl Solver {
             let mut cell_to_piece = vec![usize::MAX; self.grid.num_cells()];
             let mut solution = Vec::new();
             dlx.search(&mut solution, &mut |sol_rows| {
-                let snap = self.changed.len();
+                let snap = self.snapshot();
                 let pieces: Vec<Piece> = sol_rows
                     .iter()
                     .enumerate()
@@ -570,7 +573,7 @@ impl Solver {
                 let mut cell_to_piece_final = vec![usize::MAX; num_cells_total];
                 let mut solution = Vec::new();
                 dlx.search_with_check(&mut solution, &mut row_check, &mut |sol_rows| {
-                    let snap = self.changed.len();
+                    let snap = self.snapshot();
                     let pieces: Vec<Piece> = sol_rows
                         .iter()
                         .enumerate()
@@ -610,7 +613,7 @@ impl Solver {
                 let mut cell_to_piece_simple = vec![usize::MAX; self.grid.num_cells()];
                 let mut solution = Vec::new();
                 dlx.search(&mut solution, &mut |sol_rows| {
-                    let snap = self.changed.len();
+                    let snap = self.snapshot();
                     let pieces: Vec<Piece> = sol_rows
                         .iter()
                         .enumerate()

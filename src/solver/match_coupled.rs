@@ -23,7 +23,7 @@ impl Solver {
     }
 
     fn record_bipartite_solution(&mut self, piece1: &[CellId], _piece2: &[CellId]) {
-        let snap = self.changed.len();
+        let snap = self.snapshot();
 
         // Dedup: skip if this piece1 partition was already recorded
         let mut key: Vec<CellId> = piece1.to_vec();

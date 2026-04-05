@@ -12,6 +12,7 @@ impl Solver {
             progress |= self.propagate_delta_gemini_interaction()?;
             progress |= self.propagate_area_bounds()?;
             progress |= self.propagate_rose_separation()?;
+            progress |= self.propagate_rose_phase3()?;
             progress |= self.propagate_same_area_reachability()?;
             progress |= self.propagate_palisade_constraints()?;
             progress |= self.propagate_compass()?;
@@ -52,17 +53,16 @@ impl Solver {
             }
 
             // Probe Cut
-            let snap = self.changed.len();
+            let snap = self.snapshot();
             let cut_ok = self.set_edge(e, EdgeState::Cut) && self.propagate().is_ok();
             self.restore(snap);
 
             if !cut_ok {
                 // Cut contradicts → force Uncut
-                if self.edges[e] == EdgeState::Unknown
-                    && self.set_edge(e, EdgeState::Uncut) {
-                        forced += 1;
-                        self.propagate()?;
-                    }
+                if self.edges[e] == EdgeState::Unknown && self.set_edge(e, EdgeState::Uncut) {
+                    forced += 1;
+                    // Don't recurse here; let the outer loop handle it
+                }
                 continue;
             }
 
@@ -71,17 +71,16 @@ impl Solver {
             }
 
             // Probe Uncut
-            let snap = self.changed.len();
+            let snap = self.snapshot();
             let uncut_ok = self.set_edge(e, EdgeState::Uncut) && self.propagate().is_ok();
             self.restore(snap);
 
             if !uncut_ok {
                 // Uncut contradicts → force Cut
-                if self.edges[e] == EdgeState::Unknown
-                    && self.set_edge(e, EdgeState::Cut) {
-                        forced += 1;
-                        self.propagate()?;
-                    }
+                if self.edges[e] == EdgeState::Unknown && self.set_edge(e, EdgeState::Cut) {
+                    forced += 1;
+                    // Don't recurse here; let the outer loop handle it
+                }
             }
         }
 
@@ -181,28 +180,30 @@ impl Solver {
         if s1 == EdgeState::Uncut && s2 == EdgeState::Uncut {
             return Err(());
         }
-        if s1 == EdgeState::Uncut && s2 == EdgeState::Unknown
-            && self.set_edge(e2, EdgeState::Cut) {
-                progress = true;
-            }
-        if s2 == EdgeState::Uncut && s1 == EdgeState::Unknown
-            && self.set_edge(e1, EdgeState::Cut) {
-                progress = true;
-            }
+        if s1 == EdgeState::Uncut && s2 == EdgeState::Unknown && self.set_edge(e2, EdgeState::Cut) {
+            progress = true;
+        }
+        if s2 == EdgeState::Uncut && s1 == EdgeState::Unknown && self.set_edge(e1, EdgeState::Cut) {
+            progress = true;
+        }
 
         // 2. If Bricky, cannot both be Cut
         if self.puzzle.rules.bricky {
             if s1 == EdgeState::Cut && s2 == EdgeState::Cut {
                 return Err(());
             }
-            if s1 == EdgeState::Cut && s2 == EdgeState::Unknown
-                && self.set_edge(e2, EdgeState::Uncut) {
-                    progress = true;
-                }
-            if s2 == EdgeState::Cut && s1 == EdgeState::Unknown
-                && self.set_edge(e1, EdgeState::Uncut) {
-                    progress = true;
-                }
+            if s1 == EdgeState::Cut
+                && s2 == EdgeState::Unknown
+                && self.set_edge(e2, EdgeState::Uncut)
+            {
+                progress = true;
+            }
+            if s2 == EdgeState::Cut
+                && s1 == EdgeState::Unknown
+                && self.set_edge(e1, EdgeState::Uncut)
+            {
+                progress = true;
+            }
         }
 
         Ok(progress)

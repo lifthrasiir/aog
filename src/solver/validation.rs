@@ -136,14 +136,15 @@ impl Solver {
                 return false;
             }
         }
-        if rules.match_all && pieces.len() > 1
+        if rules.match_all
+            && pieces.len() > 1
             && !pieces
                 .iter()
                 .skip(1)
                 .all(|p| p.canonical == pieces[0].canonical)
-            {
-                return false;
-            }
+        {
+            return false;
+        }
         if rules.mismatch {
             for i in 0..pieces.len() {
                 for j in (i + 1)..pieces.len() {

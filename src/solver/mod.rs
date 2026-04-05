@@ -3,6 +3,7 @@ mod edge_state;
 mod edges;
 mod match_coupled;
 mod match_solver;
+mod pair;
 mod pieces;
 mod progress;
 mod prop_area;
@@ -18,6 +19,12 @@ mod validation;
 use crate::grid::Grid;
 use crate::types::*;
 use std::collections::HashSet;
+
+#[derive(Clone, Copy, Debug)]
+pub struct Snapshot {
+    pub edges: usize,
+    pub manual_diffs: usize,
+}
 
 pub struct Solver {
     pub(crate) puzzle: Puzzle,
@@ -70,7 +77,7 @@ pub struct Solver {
     pub(crate) watchtower_vertices: HashSet<VertexId>,
     // Bitset of rose window symbols present in the puzzle (bit i = symbol i exists)
     pub(crate) rose_bits_all: u8,
-    // Pre-computed rose symbol per cell (0xff = no rose symbol, static)
+    // Pre-computed rose symbol per cell (u8::MAX = no rose symbol, static)
     pub(crate) cell_rose_sym: Vec<u8>,
     // Reusable BFS buffers for rose propagation
     pub(crate) rose_visited: Vec<bool>,
@@ -80,6 +87,12 @@ pub struct Solver {
     pub(crate) growth_edges: Vec<Vec<EdgeId>>,
     // Recursion guard: prevents probing from running inside a probe's propagation
     pub(crate) in_probing: bool,
+    // Cell-pair constraint layer (None if no rose symbols)
+    pub(crate) pair_layer: Option<pair::CellPairLayer>,
+    // Reusable BFS buffer for path-finding (pair branching)
+    pub(crate) bfs_prev: Vec<Option<(CellId, EdgeId)>>,
+    // Manual DIFF constraints from branching (c1, c2)
+    pub(crate) manual_diffs: Vec<(CellId, CellId)>,
 }
 
 impl Solver {
@@ -119,8 +132,8 @@ impl Solver {
             }
         }
 
-        // Pre-compute rose symbol per cell (0xff = no rose symbol)
-        let mut cell_rose_sym = vec![0xffu8; nc];
+        // Pre-compute rose symbol per cell (u8::MAX = no rose symbol)
+        let mut cell_rose_sym = vec![u8::MAX; nc];
         for c in 0..nc {
             if !grid.cell_exists[c] {
                 continue;
@@ -177,6 +190,9 @@ impl Solver {
             comp_cells: Vec::new(),
             growth_edges: Vec::new(),
             in_probing: false,
+            pair_layer: None,
+            bfs_prev: Vec::new(),
+            manual_diffs: Vec::new(),
         }
     }
 
@@ -185,6 +201,13 @@ impl Solver {
         if self.edges[e] == EdgeState::Unknown {
             self.edges[e] = EdgeState::Cut;
             self.changed.push((e, EdgeState::Unknown));
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            edges: self.changed.len(),
+            manual_diffs: self.manual_diffs.len(),
         }
     }
 
@@ -229,9 +252,10 @@ impl Solver {
         for e in 0..self.grid.num_edges() {
             let (c1, c2) = self.grid.edge_cells(e);
             if (!self.grid.cell_exists[c1] || !self.grid.cell_exists[c2])
-                && self.edges[e] == EdgeState::Unknown {
-                    self.set_edge(e, EdgeState::Cut);
-                }
+                && self.edges[e] == EdgeState::Unknown
+            {
+                self.set_edge(e, EdgeState::Cut);
+            }
         }
         // Set edge clues to CUT
         let edge_clues_to_set: Vec<EdgeId> = self
@@ -245,6 +269,15 @@ impl Solver {
             self.set_edge(eid, EdgeState::Cut);
         }
         self.propagate_palisade();
+
+        // Initialize pair layer for rose puzzles
+        if self.rose_bits_all != 0 {
+            self.pair_layer = Some(pair::CellPairLayer::new(
+                self.grid.num_cells(),
+                self.rose_bits_all,
+                &self.cell_rose_sym,
+            ));
+        }
 
         if self.propagate().is_err() {
             return 0;

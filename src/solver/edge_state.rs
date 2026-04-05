@@ -1,4 +1,4 @@
-use super::Solver;
+use super::{Snapshot, Solver};
 use crate::types::*;
 
 impl Solver {
@@ -15,14 +15,15 @@ impl Solver {
         true
     }
 
-    pub(crate) fn restore(&mut self, snap: usize) {
-        while self.changed.len() > snap {
+    pub(crate) fn restore(&mut self, snap: Snapshot) {
+        while self.changed.len() > snap.edges {
             let (e, old_state) = self.changed.pop().unwrap();
             if self.edges[e] != EdgeState::Unknown && old_state == EdgeState::Unknown {
                 self.curr_unknown += 1;
             }
             self.edges[e] = old_state;
         }
+        self.manual_diffs.truncate(snap.manual_diffs);
     }
 }
 
@@ -48,7 +49,7 @@ mod tests {
         // Set to Cut
         assert!(s.set_edge(e, EdgeState::Cut));
         assert_eq!(s.edges[e], EdgeState::Cut);
-        let snap = s.changed.len();
+        let snap = s.snapshot();
 
         // Set another edge
         let e2 = s.grid.h_edge(0, 0);
@@ -75,9 +76,9 @@ mod tests {
         let e = s.grid.v_edge(0, 0);
         s.edges[e] = EdgeState::Cut;
         // Setting same state returns true without pushing to changed
-        let snap = s.changed.len();
+        let snap = s.snapshot();
         assert!(s.set_edge(e, EdgeState::Cut));
-        assert_eq!(s.changed.len(), snap);
+        assert_eq!(s.changed.len(), snap.edges);
     }
 
     #[test]
