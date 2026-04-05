@@ -76,6 +76,21 @@ impl Solver {
         {
             return false;
         }
+
+        // Pre-cut edge straddle check: no piece should have cells on
+        // both sides of a pre-cut edge (even if connected indirectly).
+        for e in 0..self.grid.num_edges() {
+            if !self.is_pre_cut[e] {
+                continue;
+            }
+            let (c1, c2) = self.grid.edge_cells(e);
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                continue;
+            }
+            if cell_piece[c1] == cell_piece[c2] {
+                return false;
+            }
+        }
         if self.edges.iter().any(|&e| e == EdgeState::Unknown) {
             return false;
         }

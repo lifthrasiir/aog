@@ -1203,6 +1203,23 @@ impl Solver {
 
     pub(crate) fn propagate_area_bounds(&mut self) -> Result<bool, ()> {
         let num_comp = self.build_components()?;
+
+        // Pre-cut edge straddle check: if both cells of a pre-cut edge
+        // are in the same component (connected via an alternative path
+        // around the Cut edge), that piece would contain a pre-cut edge → invalid.
+        for e in 0..self.grid.num_edges() {
+            if !self.is_pre_cut[e] {
+                continue;
+            }
+            let (c1, c2) = self.grid.edge_cells(e);
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                continue;
+            }
+            if self.curr_comp_id[c1] == self.curr_comp_id[c2] {
+                return Err(());
+            }
+        }
+
         let progress = self.propagate_area_constraints(num_comp)?;
         self.propagate_shape_constraints(num_comp)?;
         Ok(progress)

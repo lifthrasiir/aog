@@ -74,6 +74,8 @@ pub struct Solver {
     pub(crate) comp_cells: Vec<Vec<CellId>>,
     // Growth edges per component (populated by build_components)
     pub(crate) growth_edges: Vec<Vec<EdgeId>>,
+    // Recursion guard: prevents probing from running inside a probe's propagation
+    pub(crate) in_probing: bool,
 }
 
 impl Solver {
@@ -177,6 +179,7 @@ impl Solver {
             rose_visited,
             comp_cells: Vec::new(),
             growth_edges: Vec::new(),
+            in_probing: false,
         }
     }
 

@@ -17,9 +17,87 @@ impl Solver {
             progress |= self.propagate_watchtower()?;
 
             if !progress {
-                return Ok(true);
+                // Failed literal detection (probing): probe each unknown edge
+                // to see if one value causes contradiction. Uses recursion guard
+                // to prevent infinite loop when called from within a probe.
+                if !self.in_probing
+                    && self.rose_bits_all != 0
+                    && self.curr_unknown > 0
+                    && self.curr_unknown <= 256
+                {
+                    let saved = self.in_probing;
+                    self.in_probing = true;
+                    progress |= self.probe_one_round()?;
+                    self.in_probing = saved;
+                }
+
+                if !progress {
+                    return Ok(true);
+                }
             }
         }
+    }
+
+    /// Single round of failed literal detection: for each unknown edge,
+    /// temporarily assign Cut and Uncut, run propagation, and if one causes
+    /// contradiction, force the opposite value.
+    fn probe_one_round(&mut self) -> Result<bool, ()> {
+        let mut forced = 0usize;
+        let num_edges = self.grid.num_edges();
+
+        for e in 0..num_edges {
+            if self.edges[e] != EdgeState::Unknown {
+                continue;
+            }
+
+            // Probe Cut
+            let snap = self.changed.len();
+            let cut_ok = self.set_edge(e, EdgeState::Cut)
+                && self.propagate().is_ok();
+            self.restore(snap);
+
+            if !cut_ok {
+                // Cut contradicts → force Uncut
+                if self.edges[e] == EdgeState::Unknown {
+                    if self.set_edge(e, EdgeState::Uncut) {
+                        forced += 1;
+                        self.propagate()?;
+                    }
+                }
+                continue;
+            }
+
+            if self.edges[e] != EdgeState::Unknown {
+                continue; // forced by a previous probe's cascade
+            }
+
+            // Probe Uncut
+            let snap = self.changed.len();
+            let uncut_ok = self.set_edge(e, EdgeState::Uncut)
+                && self.propagate().is_ok();
+            self.restore(snap);
+
+            if !uncut_ok {
+                // Uncut contradicts → force Cut
+                if self.edges[e] == EdgeState::Unknown {
+                    if self.set_edge(e, EdgeState::Cut) {
+                        forced += 1;
+                        self.propagate()?;
+                    }
+                }
+            }
+        }
+
+        Ok(forced > 0)
+    }
+
+    /// Multi-round probing (standalone, for initial solve phase).
+    /// Calls propagate() internally which includes integrated probing,
+    /// so this is equivalent to just running propagate() with the
+    /// probing threshold already handled.
+    pub(crate) fn probe_edges(&mut self) -> Result<(), ()> {
+        // Just run propagate; the integrated probing handles everything
+        self.propagate().map(|_| ())
     }
 
     pub(crate) fn propagate_bricky_loopy(&mut self) -> Result<bool, ()> {
