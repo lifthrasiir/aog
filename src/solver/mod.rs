@@ -93,6 +93,8 @@ pub struct Solver {
     pub(crate) bfs_prev: Vec<Option<(CellId, EdgeId)>>,
     // Manual DIFF constraints from branching (c1, c2)
     pub(crate) manual_diffs: Vec<(CellId, CellId)>,
+    // Solver start time for elapsed-time reporting
+    pub(crate) start_time: std::time::Instant,
 }
 
 impl Solver {
@@ -193,6 +195,7 @@ impl Solver {
             pair_layer: None,
             bfs_prev: Vec::new(),
             manual_diffs: Vec::new(),
+            start_time: std::time::Instant::now(),
         }
     }
 
@@ -212,7 +215,7 @@ impl Solver {
     }
 
     pub fn solve(&mut self) -> usize {
-        self.progress.reset();
+        self.progress.reset(self.start_time);
         self.compute_area_bounds();
         self.total_cells = self.grid.total_existing_cells();
 
@@ -401,10 +404,11 @@ impl Solver {
     pub(crate) fn report_solution(&self, which: usize) {
         // Clear the progress line on stderr
         progress::Progress::clear_line();
+        let elapsed = self.start_time.elapsed().as_secs_f64();
         let header = match which {
-            1 => "First solution found:",
-            2 => "Second solution found:",
-            _ => "Solution found:",
+            1 => format!("First solution found ({:.1}s):", elapsed),
+            2 => format!("Second solution found ({:.1}s):", elapsed),
+            _ => format!("Solution found ({:.1}s):", elapsed),
         };
         println!("{}", header);
         print!(

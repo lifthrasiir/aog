@@ -45,7 +45,7 @@ fn main() -> ExitCode {
     if count == 0 {
         println!("No solution");
     } else if count == 1 {
-        println!("Unique solution found.");
+        println!("Unique solution found ({:.1}s).", s.start_time.elapsed().as_secs_f64());
     } else {
         println!("Multiple solutions found ({} shown above).", count);
     }
