@@ -440,12 +440,12 @@ impl Parser {
             });
         } else if content.len() == 1 {
             let ch = content.as_bytes()[0];
-            if ch >= b'A' && ch <= b'E' {
+            if (b'A'..=b'E').contains(&ch) {
                 self.puzzle.cell_clues.push(CellClue::Rose {
                     cell: cid,
-                    symbol: (ch - b'A') as u8,
+                    symbol: (ch - b'A'),
                 });
-            } else if ch >= b'F' && ch <= b'Z' {
+            } else if (b'F'..=b'Z').contains(&ch) {
                 if let Some(shape) = polyomino::get_named_shape(content) {
                     self.puzzle
                         .cell_clues
@@ -714,7 +714,7 @@ impl Parser {
                         let sym = rest.split_whitespace().nth(2).unwrap_or("A").as_bytes()[0];
                         self.puzzle.cell_clues.push(CellClue::Rose {
                             cell: cid,
-                            symbol: (sym - b'A') as u8,
+                            symbol: (sym - b'A'),
                         });
                     } else if ctype == "palisade" {
                         let pval = rest.split_whitespace().nth(2).unwrap_or("");

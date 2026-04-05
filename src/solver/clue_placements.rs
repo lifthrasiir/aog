@@ -60,10 +60,9 @@ impl Solver {
                     && clue_at[neighbor].is_none()
                     && !current.contains(&neighbor)
                     && !my_candidates.contains(&neighbor)
+                    && candidates.insert(neighbor)
                 {
-                    if candidates.insert(neighbor) {
-                        added.push(neighbor);
-                    }
+                    added.push(neighbor);
                 }
             }
 
@@ -457,6 +456,7 @@ impl Solver {
         results
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn grouped_grow(
         &self,
         current: &mut Vec<CellId>,
@@ -503,10 +503,9 @@ impl Solver {
                     && !in_set.contains(&other)
                     && !forbidden.contains(&other)
                     && !my_frontier.contains(&other)
+                    && frontier.insert(other)
                 {
-                    if frontier.insert(other) {
-                        added.push(other);
-                    }
+                    added.push(other);
                 }
             }
 

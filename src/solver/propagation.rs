@@ -58,12 +58,11 @@ impl Solver {
 
             if !cut_ok {
                 // Cut contradicts → force Uncut
-                if self.edges[e] == EdgeState::Unknown {
-                    if self.set_edge(e, EdgeState::Uncut) {
+                if self.edges[e] == EdgeState::Unknown
+                    && self.set_edge(e, EdgeState::Uncut) {
                         forced += 1;
                         self.propagate()?;
                     }
-                }
                 continue;
             }
 
@@ -78,12 +77,11 @@ impl Solver {
 
             if !uncut_ok {
                 // Uncut contradicts → force Cut
-                if self.edges[e] == EdgeState::Unknown {
-                    if self.set_edge(e, EdgeState::Cut) {
+                if self.edges[e] == EdgeState::Unknown
+                    && self.set_edge(e, EdgeState::Cut) {
                         forced += 1;
                         self.propagate()?;
                     }
-                }
             }
         }
 
@@ -183,32 +181,28 @@ impl Solver {
         if s1 == EdgeState::Uncut && s2 == EdgeState::Uncut {
             return Err(());
         }
-        if s1 == EdgeState::Uncut && s2 == EdgeState::Unknown {
-            if self.set_edge(e2, EdgeState::Cut) {
+        if s1 == EdgeState::Uncut && s2 == EdgeState::Unknown
+            && self.set_edge(e2, EdgeState::Cut) {
                 progress = true;
             }
-        }
-        if s2 == EdgeState::Uncut && s1 == EdgeState::Unknown {
-            if self.set_edge(e1, EdgeState::Cut) {
+        if s2 == EdgeState::Uncut && s1 == EdgeState::Unknown
+            && self.set_edge(e1, EdgeState::Cut) {
                 progress = true;
             }
-        }
 
         // 2. If Bricky, cannot both be Cut
         if self.puzzle.rules.bricky {
             if s1 == EdgeState::Cut && s2 == EdgeState::Cut {
                 return Err(());
             }
-            if s1 == EdgeState::Cut && s2 == EdgeState::Unknown {
-                if self.set_edge(e2, EdgeState::Uncut) {
+            if s1 == EdgeState::Cut && s2 == EdgeState::Unknown
+                && self.set_edge(e2, EdgeState::Uncut) {
                     progress = true;
                 }
-            }
-            if s2 == EdgeState::Cut && s1 == EdgeState::Unknown {
-                if self.set_edge(e1, EdgeState::Uncut) {
+            if s2 == EdgeState::Cut && s1 == EdgeState::Unknown
+                && self.set_edge(e1, EdgeState::Uncut) {
                     progress = true;
                 }
-            }
         }
 
         Ok(progress)

@@ -31,11 +31,10 @@ impl Solver {
             for eid in self.grid.cell_edges(cid).into_iter().flatten() {
                 let (c1, c2) = self.grid.edge_cells(eid);
                 let other = if c1 == cid { c2 } else { c1 };
-                if other > cid && cell_set.contains(&other) {
-                    if self.is_pre_cut[eid] || self.edges[eid] == EdgeState::Cut {
+                if other > cid && cell_set.contains(&other)
+                    && (self.is_pre_cut[eid] || self.edges[eid] == EdgeState::Cut) {
                         return false;
                     }
-                }
             }
         }
         true
@@ -47,11 +46,10 @@ impl Solver {
             for eid in self.grid.cell_edges(cid).into_iter().flatten() {
                 let (c1, c2) = self.grid.edge_cells(eid);
                 let other = if c1 == cid { c2 } else { c1 };
-                if !self.grid.cell_exists[other] || cells.binary_search(&other).is_err() {
-                    if self.edges[eid] == EdgeState::Uncut {
+                if (!self.grid.cell_exists[other] || cells.binary_search(&other).is_err())
+                    && self.edges[eid] == EdgeState::Uncut {
                         return false;
                     }
-                }
             }
         }
         true

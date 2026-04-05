@@ -228,11 +228,10 @@ impl Solver {
         // Set pre-cut edges for missing cells
         for e in 0..self.grid.num_edges() {
             let (c1, c2) = self.grid.edge_cells(e);
-            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
-                if self.edges[e] == EdgeState::Unknown {
+            if (!self.grid.cell_exists[c1] || !self.grid.cell_exists[c2])
+                && self.edges[e] == EdgeState::Unknown {
                     self.set_edge(e, EdgeState::Cut);
                 }
-            }
         }
         // Set edge clues to CUT
         let edge_clues_to_set: Vec<EdgeId> = self
@@ -290,7 +289,7 @@ impl Solver {
                         .cell_clues
                         .iter()
                         .find(|cl| matches!(cl, CellClue::Rose { cell, .. } if *cell == cid));
-                    if let Some(_) = rose {
+                    if rose.is_some() {
                         row_str.push('A');
                     } else {
                         row_str.push('_');

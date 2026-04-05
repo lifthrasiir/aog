@@ -94,7 +94,7 @@ impl Solver {
         if rose_cells.len() != 2 {
             return;
         }
-        if self.total_cells % 2 != 0 {
+        if !self.total_cells.is_multiple_of(2) {
             return;
         }
 
@@ -313,6 +313,7 @@ impl Solver {
         cnt == existing_cells.iter().filter(|&&c| in_set[c]).count()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn coupled_dfs_v2(
         &mut self,
         adj: &[Vec<CellId>],

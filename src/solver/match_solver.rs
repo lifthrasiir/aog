@@ -32,7 +32,7 @@ impl Solver {
                     .rules
                     .shape_bank
                     .iter()
-                    .map(|s| canonical(s))
+                    .map(canonical)
                     .collect();
             }
             self.backtrack_pieces();
@@ -165,11 +165,10 @@ impl Solver {
                                     if self.edges[eid] == EdgeState::Unknown {
                                         let _ = self.set_edge(eid, EdgeState::Uncut);
                                     }
-                                } else if placed_set.contains(&other) {
-                                    if self.edges[eid] == EdgeState::Unknown {
+                                } else if placed_set.contains(&other)
+                                    && self.edges[eid] == EdgeState::Unknown {
                                         let _ = self.set_edge(eid, EdgeState::Cut);
                                     }
-                                }
                             }
                         }
                     }
@@ -328,7 +327,7 @@ impl Solver {
                     return;
                 }
                 let area = shape.cells.len();
-                if total % area != 0 || area >= total {
+                if !total.is_multiple_of(area) || area >= total {
                     continue;
                 }
                 if area < self.eff_min_area || area > self.eff_max_area {
@@ -415,7 +414,7 @@ impl Solver {
         let mut result = Vec::new();
         let mut d = 1usize;
         while d * d <= n {
-            if n % d == 0 {
+            if n.is_multiple_of(d) {
                 if d >= lo && d <= hi && d < n {
                     result.push(d);
                 }

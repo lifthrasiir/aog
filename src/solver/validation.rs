@@ -112,7 +112,7 @@ impl Solver {
                 return false;
             }
         }
-        if self.edges.iter().any(|&e| e == EdgeState::Unknown) {
+        if self.edges.contains(&EdgeState::Unknown) {
             return false;
         }
 
@@ -136,15 +136,14 @@ impl Solver {
                 return false;
             }
         }
-        if rules.match_all && pieces.len() > 1 {
-            if !pieces
+        if rules.match_all && pieces.len() > 1
+            && !pieces
                 .iter()
                 .skip(1)
                 .all(|p| p.canonical == pieces[0].canonical)
             {
                 return false;
             }
-        }
         if rules.mismatch {
             for i in 0..pieces.len() {
                 for j in (i + 1)..pieces.len() {

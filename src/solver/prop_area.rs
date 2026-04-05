@@ -137,14 +137,12 @@ impl Solver {
             if ci1 != ci2 {
                 let cannot_merge = if self.puzzle.rules.solitude {
                     self.curr_target_area[ci1].is_some() && self.curr_target_area[ci2].is_some()
+                } else if let (Some(a1), Some(a2)) =
+                    (self.curr_target_area[ci1], self.curr_target_area[ci2])
+                {
+                    a1 != a2
                 } else {
-                    if let (Some(a1), Some(a2)) =
-                        (self.curr_target_area[ci1], self.curr_target_area[ci2])
-                    {
-                        a1 != a2
-                    } else {
-                        false
-                    }
+                    false
                 };
 
                 if cannot_merge {
@@ -177,21 +175,19 @@ impl Solver {
                 let limit1 = self.curr_target_area[ci1].unwrap_or(self.eff_max_area);
                 let limit2 = self.curr_target_area[ci2].unwrap_or(self.eff_max_area);
 
-                if self.curr_comp_sz[ci1] >= limit1 || self.curr_comp_sz[ci2] >= limit2 {
-                    if !self.set_edge(e, EdgeState::Cut) {
+                if (self.curr_comp_sz[ci1] >= limit1 || self.curr_comp_sz[ci2] >= limit2)
+                    && !self.set_edge(e, EdgeState::Cut) {
                         return Err(());
                     }
-                }
             }
         }
 
         // Apply same-area forced Uncuts (collected above to avoid stale component state)
         for &e in &same_area_forced_uncuts {
-            if self.edges[e] == EdgeState::Unknown {
-                if !self.set_edge(e, EdgeState::Uncut) {
+            if self.edges[e] == EdgeState::Unknown
+                && !self.set_edge(e, EdgeState::Uncut) {
                     return Err(());
                 }
-            }
         }
 
         // === Rose window propagation ===
@@ -252,11 +248,10 @@ impl Solver {
             }
 
             for &e in &rose_cut_set {
-                if self.edges[e] == EdgeState::Unknown {
-                    if !self.set_edge(e, EdgeState::Cut) {
+                if self.edges[e] == EdgeState::Unknown
+                    && !self.set_edge(e, EdgeState::Cut) {
                         return Err(());
                     }
-                }
             }
         }
         Ok(num_comp)

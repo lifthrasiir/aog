@@ -374,22 +374,26 @@ mod tests {
     fn is_rectangular_with_grid() {
         let g = Grid::new(3, 3, true);
         // 2x2 block = rectangular
-        let mut p = Piece::default();
-        p.cells = vec![
-            g.cell_id(0, 0),
-            g.cell_id(0, 1),
-            g.cell_id(1, 0),
-            g.cell_id(1, 1),
-        ];
+        let p = Piece {
+            cells: vec![
+                g.cell_id(0, 0),
+                g.cell_id(0, 1),
+                g.cell_id(1, 0),
+                g.cell_id(1, 1),
+            ],
+            ..Piece::default()
+        };
         assert!(is_rectangular(&p, &g));
         // L-shape = not rectangular
-        let mut p2 = Piece::default();
-        p2.cells = vec![
-            g.cell_id(0, 0),
-            g.cell_id(1, 0),
-            g.cell_id(2, 0),
-            g.cell_id(2, 1),
-        ];
+        let p2 = Piece {
+            cells: vec![
+                g.cell_id(0, 0),
+                g.cell_id(1, 0),
+                g.cell_id(2, 0),
+                g.cell_id(2, 1),
+            ],
+            ..Piece::default()
+        };
         assert!(!is_rectangular(&p2, &g));
     }
 

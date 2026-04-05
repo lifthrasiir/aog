@@ -97,11 +97,10 @@ impl Solver {
 
             // Bonus: edge adjacent to a clue-constrained component
             // (component touching a gemini/delta/inequality/diff edge)
-            if has_clue_edges {
-                if clue_constrained_comp[ci1] || clue_constrained_comp[ci2] {
+            if has_clue_edges
+                && (clue_constrained_comp[ci1] || clue_constrained_comp[ci2]) {
                     score += 30;
                 }
-            }
 
             // Bonus: edge incident to a watchtower vertex
             if !self.watchtower_vertices.is_empty() {

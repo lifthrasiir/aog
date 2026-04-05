@@ -9,6 +9,7 @@ impl Solver {
     ///   - N=4, E=4 (2×2 block, one cycle): pieces = max(1, k) where k = cut edges
     ///   - N=2..3 (tree): pieces = 1 + k
     ///   - N=1: always 1 piece (no edges to propagate)
+    ///
     /// value=v constrains the required number of cut edges accordingly.
     pub(crate) fn propagate_watchtower(&mut self) -> Result<bool, ()> {
         let mut progress = false;
