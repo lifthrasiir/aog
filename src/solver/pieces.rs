@@ -6,6 +6,25 @@ use std::collections::HashSet;
 
 impl Solver {
     fn is_placement_valid(&self, cells: &[CellId], shape_idx: usize, rose_symbols: &[u8]) -> bool {
+        if !self.check_internal_edges(cells) {
+            return false;
+        }
+        if !self.check_boundary_edges(cells) {
+            return false;
+        }
+        if !self.check_solitude(cells) {
+            return false;
+        }
+        if !self.check_rose_in_piece(cells, rose_symbols) {
+            return false;
+        }
+        if !self.check_local_cell_clues(cells, shape_idx) {
+            return false;
+        }
+        true
+    }
+
+    fn check_internal_edges(&self, cells: &[CellId]) -> bool {
         // Internal edges must not be Cut or Pre-cut
         let cell_set: HashSet<CellId> = cells.iter().copied().collect();
         for &cid in cells {
@@ -19,7 +38,10 @@ impl Solver {
                 }
             }
         }
+        true
+    }
 
+    fn check_boundary_edges(&self, cells: &[CellId]) -> bool {
         // Boundary edges must not be Uncut
         for &cid in cells {
             for eid in self.grid.cell_edges(cid).into_iter().flatten() {
@@ -32,7 +54,10 @@ impl Solver {
                 }
             }
         }
+        true
+    }
 
+    fn check_solitude(&self, cells: &[CellId]) -> bool {
         // Solitude rule: exactly one cell with any clue
         if self.puzzle.rules.solitude {
             let mut clue_count = 0;
@@ -45,7 +70,10 @@ impl Solver {
                 return false;
             }
         }
+        true
+    }
 
+    fn check_rose_in_piece(&self, cells: &[CellId], rose_symbols: &[u8]) -> bool {
         // Rose window rule: exactly one of each symbol present in the puzzle
         for &sym in rose_symbols {
             let mut found = false;
@@ -68,8 +96,10 @@ impl Solver {
                 return false;
             }
         }
+        true
+    }
 
-        // Local cell clues
+    fn check_local_cell_clues(&self, cells: &[CellId], shape_idx: usize) -> bool {
         for &cid in cells {
             for &idx in &self.cell_clues_indexed[cid] {
                 match &self.puzzle.cell_clues[idx] {
@@ -507,7 +537,9 @@ impl Solver {
                             if p1 == usize::MAX || p2 == usize::MAX || p1 == p2 {
                                 continue;
                             }
-                            if placements[solution[p1]].canonical != placements[solution[p2]].canonical {
+                            if placements[solution[p1]].canonical
+                                != placements[solution[p2]].canonical
+                            {
                                 return false;
                             }
                         }

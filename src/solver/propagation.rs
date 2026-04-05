@@ -53,8 +53,7 @@ impl Solver {
 
             // Probe Cut
             let snap = self.changed.len();
-            let cut_ok = self.set_edge(e, EdgeState::Cut)
-                && self.propagate().is_ok();
+            let cut_ok = self.set_edge(e, EdgeState::Cut) && self.propagate().is_ok();
             self.restore(snap);
 
             if !cut_ok {
@@ -74,8 +73,7 @@ impl Solver {
 
             // Probe Uncut
             let snap = self.changed.len();
-            let uncut_ok = self.set_edge(e, EdgeState::Uncut)
-                && self.propagate().is_ok();
+            let uncut_ok = self.set_edge(e, EdgeState::Uncut) && self.propagate().is_ok();
             self.restore(snap);
 
             if !uncut_ok {
@@ -146,10 +144,11 @@ impl Solver {
                 // Case 1: Gemini/Delta on vertical stack (h_up, h_down)
                 // Note: h_edge is a HORIZONTAL line, but h_up/h_down form a VERTICAL stack.
                 if let (Some(e1), Some(e2)) = (h_up, h_down) {
-                    if matches!((edge_kinds[e1], edge_kinds[e2]),
-                        (Some(EdgeClueKind::Gemini), Some(EdgeClueKind::Delta)) |
-                        (Some(EdgeClueKind::Delta), Some(EdgeClueKind::Gemini)))
-                    {
+                    if matches!(
+                        (edge_kinds[e1], edge_kinds[e2]),
+                        (Some(EdgeClueKind::Gemini), Some(EdgeClueKind::Delta))
+                            | (Some(EdgeClueKind::Delta), Some(EdgeClueKind::Gemini))
+                    ) {
                         if let (Some(t1), Some(t2)) = (v_left, v_right) {
                             progress |= self.propagate_transverse_pair(t1, t2)?;
                         }
@@ -159,10 +158,11 @@ impl Solver {
                 // Case 2: Gemini/Delta on horizontal stack (v_left, v_right)
                 // Note: v_edge is a VERTICAL line, but v_left/v_right form a HORIZONTAL stack.
                 if let (Some(e1), Some(e2)) = (v_left, v_right) {
-                    if matches!((edge_kinds[e1], edge_kinds[e2]),
-                        (Some(EdgeClueKind::Gemini), Some(EdgeClueKind::Delta)) |
-                        (Some(EdgeClueKind::Delta), Some(EdgeClueKind::Gemini)))
-                    {
+                    if matches!(
+                        (edge_kinds[e1], edge_kinds[e2]),
+                        (Some(EdgeClueKind::Gemini), Some(EdgeClueKind::Delta))
+                            | (Some(EdgeClueKind::Delta), Some(EdgeClueKind::Gemini))
+                    ) {
                         if let (Some(t1), Some(t2)) = (h_up, h_down) {
                             progress |= self.propagate_transverse_pair(t1, t2)?;
                         }
@@ -264,8 +264,14 @@ mod tests {
         // Vertex (1, 1): h_up=H(0, 1), h_down=H(1, 1), v_left=V(1, 0), v_right=V(1, 1)
         let h_up = s.grid.h_edge(0, 1);
         let h_down = s.grid.h_edge(1, 1);
-        s.puzzle.edge_clues.push(EdgeClue { edge: h_up, kind: EdgeClueKind::Gemini });
-        s.puzzle.edge_clues.push(EdgeClue { edge: h_down, kind: EdgeClueKind::Delta });
+        s.puzzle.edge_clues.push(EdgeClue {
+            edge: h_up,
+            kind: EdgeClueKind::Gemini,
+        });
+        s.puzzle.edge_clues.push(EdgeClue {
+            edge: h_down,
+            kind: EdgeClueKind::Delta,
+        });
         s.edges[h_up] = EdgeState::Cut;
         s.edges[h_down] = EdgeState::Cut;
 
@@ -295,8 +301,14 @@ mod tests {
         s.puzzle.rules.bricky = true;
         let h_up = s.grid.h_edge(0, 1);
         let h_down = s.grid.h_edge(1, 1);
-        s.puzzle.edge_clues.push(EdgeClue { edge: h_up, kind: EdgeClueKind::Gemini });
-        s.puzzle.edge_clues.push(EdgeClue { edge: h_down, kind: EdgeClueKind::Delta });
+        s.puzzle.edge_clues.push(EdgeClue {
+            edge: h_up,
+            kind: EdgeClueKind::Gemini,
+        });
+        s.puzzle.edge_clues.push(EdgeClue {
+            edge: h_down,
+            kind: EdgeClueKind::Delta,
+        });
         s.edges[h_up] = EdgeState::Cut;
         s.edges[h_down] = EdgeState::Cut;
 
@@ -326,8 +338,14 @@ mod tests {
         // Vertex (1, 1): v_left=V(1, 0), v_right=V(1, 1)
         let v_left = s.grid.v_edge(1, 0);
         let v_right = s.grid.v_edge(1, 1);
-        s.puzzle.edge_clues.push(EdgeClue { edge: v_left, kind: EdgeClueKind::Gemini });
-        s.puzzle.edge_clues.push(EdgeClue { edge: v_right, kind: EdgeClueKind::Delta });
+        s.puzzle.edge_clues.push(EdgeClue {
+            edge: v_left,
+            kind: EdgeClueKind::Gemini,
+        });
+        s.puzzle.edge_clues.push(EdgeClue {
+            edge: v_right,
+            kind: EdgeClueKind::Delta,
+        });
         s.edges[v_left] = EdgeState::Cut;
         s.edges[v_right] = EdgeState::Cut;
 

@@ -1,13 +1,17 @@
+mod clue_placements;
 mod edge_state;
 mod edges;
 mod match_coupled;
 mod match_solver;
 mod pieces;
 mod progress;
-mod propagation;
 mod prop_area;
+mod prop_compass;
 mod prop_palisade;
+mod prop_rose;
+mod prop_shape;
 mod prop_watchtower;
+mod propagation;
 pub(crate) mod shapes;
 mod validation;
 
@@ -103,17 +107,10 @@ impl Solver {
             })
             .collect();
 
-        let clue_cut_edges: Vec<EdgeId> = puzzle
-            .edge_clues
-            .iter()
-            .map(|cl| cl.edge)
-            .collect();
+        let clue_cut_edges: Vec<EdgeId> = puzzle.edge_clues.iter().map(|cl| cl.edge).collect();
 
-        let watchtower_vertices: HashSet<VertexId> = puzzle
-            .vertex_clues
-            .iter()
-            .map(|cl| cl.vertex)
-            .collect();
+        let watchtower_vertices: HashSet<VertexId> =
+            puzzle.vertex_clues.iter().map(|cl| cl.vertex).collect();
 
         let mut rose_bits_all: u8 = 0;
         for cl in &puzzle.cell_clues {
@@ -326,8 +323,12 @@ impl Solver {
 
     fn report_progress(&mut self) {
         if let Some(elapsed_secs) = self.progress.should_report(self.node_count) {
-            self.progress
-                .print(elapsed_secs, self.node_count, self.curr_unknown, self.total_unknown);
+            self.progress.print(
+                elapsed_secs,
+                self.node_count,
+                self.curr_unknown,
+                self.total_unknown,
+            );
         }
     }
 
@@ -396,4 +397,3 @@ pub(crate) mod test_helpers {
         s
     }
 }
-

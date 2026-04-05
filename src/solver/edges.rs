@@ -68,10 +68,8 @@ impl Solver {
                 score += 10;
             }
 
-            let sealed1 =
-                ci1 < self.can_grow_buf.len() && !self.can_grow_buf[ci1];
-            let sealed2 =
-                ci2 < self.can_grow_buf.len() && !self.can_grow_buf[ci2];
+            let sealed1 = ci1 < self.can_grow_buf.len() && !self.can_grow_buf[ci1];
+            let sealed2 = ci2 < self.can_grow_buf.len() && !self.can_grow_buf[ci2];
 
             // General bonuses (apply regardless of size_separation)
 
@@ -114,8 +112,7 @@ impl Solver {
                 } else {
                     self.grid.vertex(r, c + 1)
                 };
-                if self.watchtower_vertices.contains(&v1)
-                    || self.watchtower_vertices.contains(&v2)
+                if self.watchtower_vertices.contains(&v1) || self.watchtower_vertices.contains(&v2)
                 {
                     score += 25;
                 }
@@ -127,9 +124,7 @@ impl Solver {
                 if let Some(ref sns) = self.cached_sealed_neighbor_sizes {
                     if ci1 < sns.len() && ci2 < sns.len() {
                         let merged_sz = sz1 + sz2;
-                        if sns[ci1].contains(&merged_sz)
-                            || sns[ci2].contains(&merged_sz)
-                        {
+                        if sns[ci1].contains(&merged_sz) || sns[ci2].contains(&merged_sz) {
                             score += 200; // immediate contradiction if Uncut
                         }
                     }

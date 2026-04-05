@@ -220,8 +220,7 @@ impl Parser {
             // Multi-char tokens (e.g. <0>) may start before the grid column;
             // match if any byte within the token falls on a grid column.
             let mut token_indices: Vec<usize> = Vec::new();
-            let mut token_at_line: Vec<Option<(usize, String)>> =
-                vec![None; grid_line_cols.len()];
+            let mut token_at_line: Vec<Option<(usize, String)>> = vec![None; grid_line_cols.len()];
             for tok in &tokens {
                 if let Some(idx) =
                     Self::match_token_to_grid_col(tok.col, tok.text.len(), &grid_line_cols)
@@ -302,7 +301,11 @@ impl Parser {
                         plus_indices.push(idx);
                         if ch != '+' {
                             let val: usize = match ch {
-                                '!' => 1, '@' => 2, '#' => 3, '$' => 4, _ => 0,
+                                '!' => 1,
+                                '@' => 2,
+                                '#' => 3,
+                                '$' => 4,
+                                _ => 0,
                             };
                             self.puzzle.vertex_clues.push(VertexClue {
                                 vertex: self.grid.vertex(edge_row_idx, idx),
@@ -373,7 +376,10 @@ impl Parser {
             let ch = bytes[i] as char;
             match ch {
                 '|' | '.' | 'd' | 'g' | '^' | 'v' | '>' => {
-                    tokens.push(CellToken { col: i, text: ch.to_string() });
+                    tokens.push(CellToken {
+                        col: i,
+                        text: ch.to_string(),
+                    });
                     i += 1;
                 }
                 '<' => {
@@ -383,14 +389,22 @@ impl Parser {
                         j += 1;
                     }
                     if j > i + 1 && j < bytes.len() && bytes[j] == b'>' {
-                        tokens.push(CellToken { col: i, text: line[i..=j].to_owned() });
+                        tokens.push(CellToken {
+                            col: i,
+                            text: line[i..=j].to_owned(),
+                        });
                         i = j + 1;
                     } else {
-                        tokens.push(CellToken { col: i, text: '<'.to_string() });
+                        tokens.push(CellToken {
+                            col: i,
+                            text: '<'.to_string(),
+                        });
                         i += 1;
                     }
                 }
-                _ => { i += 1; }
+                _ => {
+                    i += 1;
+                }
             }
         }
         tokens
@@ -745,9 +759,8 @@ impl Parser {
                         }),
                         _ => {
                             // Difference clue: <N>  (e.g. <3>)
-                            if let Some(inner) = ctype
-                                .strip_prefix('<')
-                                .and_then(|s| s.strip_suffix('>'))
+                            if let Some(inner) =
+                                ctype.strip_prefix('<').and_then(|s| s.strip_suffix('>'))
                             {
                                 if let Ok(val) = inner.parse() {
                                     self.puzzle.edge_clues.push(EdgeClue {

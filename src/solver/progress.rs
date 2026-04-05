@@ -35,7 +35,10 @@ impl Progress {
 
     /// Returns `Some(elapsed_secs)` if a progress line should be printed.
     pub(crate) fn should_report(&mut self, node_count: u64) -> Option<f64> {
-        self.lcg_state = self.lcg_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        self.lcg_state = self
+            .lcg_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1);
         if (self.lcg_state as usize) < u64::MAX as usize / PROGRESS_CHECK_RATIO {
             let now = Instant::now();
             if now - self.last_report >= PROGRESS_INTERVAL {
@@ -72,11 +75,7 @@ impl Progress {
     ) {
         eprint!(
             "\r{:>7.1}s  nodes: {:>10} | {:>8.0} n/s | remaining unknown: {:>4}/{:<4}",
-            elapsed_secs,
-            node_count,
-            self.ema_nps,
-            curr_unknown,
-            total_unknown
+            elapsed_secs, node_count, self.ema_nps, curr_unknown, total_unknown
         );
         let _ = std::io::stderr().flush();
     }

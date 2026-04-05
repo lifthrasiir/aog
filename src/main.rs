@@ -167,7 +167,8 @@ shape bank T L
         for line in content.lines() {
             let trimmed = line.trim();
             if !in_solution {
-                let (prefix, multiple) = if let Some(r) = trimmed.strip_prefix("# unique solution") {
+                let (prefix, multiple) = if let Some(r) = trimmed.strip_prefix("# unique solution")
+                {
                     (Some(r), false)
                 } else if let Some(r) = trimmed.strip_prefix("# multiple solutions") {
                     (Some(r), true)
@@ -255,8 +256,16 @@ shape bank T L
                     s.mark_pre_cut(e);
                 }
                 let count = s.solve();
-                let first = formatter::format_solution(s.get_grid(), s.get_first_edges(), s.get_first_pieces());
-                let best = formatter::format_solution(s.get_grid(), s.get_best_edges(), s.get_best_pieces());
+                let first = formatter::format_solution(
+                    s.get_grid(),
+                    s.get_first_edges(),
+                    s.get_first_pieces(),
+                );
+                let best = formatter::format_solution(
+                    s.get_grid(),
+                    s.get_best_edges(),
+                    s.get_best_pieces(),
+                );
                 let _ = tx.send((count, first, best));
             })
             .expect("failed to spawn thread");
@@ -271,13 +280,18 @@ shape bank T L
                     );
                     let actual = normalize_solution(&best_output);
                     let expected_norm = normalize_solution(&lines.join("\n"));
-                    assert_eq!(actual, expected_norm, "{}: solution shape mismatch", path_display);
+                    assert_eq!(
+                        actual, expected_norm,
+                        "{}: solution shape mismatch",
+                        path_display
+                    );
                 }
                 SampleExpected::Multiple(groups) => {
                     assert!(
                         count >= 2,
                         "{}: expected multiple solutions, got {}",
-                        path_display, count
+                        path_display,
+                        count
                     );
                     let expected_norms: Vec<String> = groups
                         .iter()
@@ -308,7 +322,9 @@ shape bank T L
             },
             Err(_) => panic!(
                 "{}: timed out after {}s (use `# unique solution ({}s):` to increase)",
-                path_display, timeout_secs, timeout_secs + 1,
+                path_display,
+                timeout_secs,
+                timeout_secs + 1,
             ),
         }
         drop(child);

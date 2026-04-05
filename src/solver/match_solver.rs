@@ -127,8 +127,7 @@ impl Solver {
                     // Check overlap with other clues' known placements
                     let mut overlaps = false;
                     for (other_idx, other_known) in known.iter().enumerate() {
-                        if other_idx != target_clue
-                            && cells.iter().any(|c| other_known.contains(c))
+                        if other_idx != target_clue && cells.iter().any(|c| other_known.contains(c))
                         {
                             overlaps = true;
                             break;
@@ -148,8 +147,10 @@ impl Solver {
                             all_cells.push((ci, c.iter().copied().collect()));
                         }
                     }
-                    let placed_set: HashSet<CellId> =
-                        all_cells.iter().flat_map(|(_, c)| c.iter().copied()).collect();
+                    let placed_set: HashSet<CellId> = all_cells
+                        .iter()
+                        .flat_map(|(_, c)| c.iter().copied())
+                        .collect();
                     for (_, cells) in &all_cells {
                         for &cid in cells {
                             for eid in self.grid.cell_edges(cid).into_iter().flatten() {
@@ -159,9 +160,7 @@ impl Solver {
                                     continue;
                                 }
                                 if placed_set.contains(&other)
-                                    && all_cells
-                                        .iter()
-                                        .any(|(_, c)| c.contains(&other))
+                                    && all_cells.iter().any(|(_, c)| c.contains(&other))
                                 {
                                     if self.edges[eid] == EdgeState::Unknown {
                                         let _ = self.set_edge(eid, EdgeState::Uncut);
@@ -205,8 +204,10 @@ impl Solver {
             let snap = self.changed.len();
 
             // Build a set of placed cells for fast lookup
-            let placed_set: HashSet<CellId> =
-                solution.iter().flat_map(|(_, cells)| cells.iter().copied()).collect();
+            let placed_set: HashSet<CellId> = solution
+                .iter()
+                .flat_map(|(_, cells)| cells.iter().copied())
+                .collect();
 
             // Set edges: Uncut within each piece, Cut between pieces / placed vs unplaced
             for (_, cells) in solution.iter() {

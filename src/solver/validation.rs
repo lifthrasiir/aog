@@ -65,6 +65,27 @@ impl Solver {
                 cell_piece[c] = p;
             }
         }
+
+        if !self.validate_structure(pieces, &cell_piece) {
+            return false;
+        }
+        if !self.validate_cell_clues(pieces, &cell_piece) {
+            return false;
+        }
+        if !self.validate_rose_window(pieces) {
+            return false;
+        }
+        if !self.validate_edge_clues(pieces, &cell_piece) {
+            return false;
+        }
+        if !self.validate_vertex_clues(&cell_piece) {
+            return false;
+        }
+
+        true
+    }
+
+    fn validate_structure(&self, pieces: &[Piece], cell_piece: &[usize]) -> bool {
         if pieces.iter().any(|p| p.cells.is_empty()) {
             return false;
         }
@@ -189,8 +210,10 @@ impl Solver {
                 }
             }
         }
+        true
+    }
 
-        // Cell clues
+    fn validate_cell_clues(&self, pieces: &[Piece], cell_piece: &[usize]) -> bool {
         for clue in &self.puzzle.cell_clues {
             if !self.grid.cell_exists[clue.cell()] {
                 return false;
@@ -281,35 +304,38 @@ impl Solver {
                 }
             }
         }
+        true
+    }
 
+    fn validate_rose_window(&self, pieces: &[Piece]) -> bool {
         // Rose window: each piece must contain exactly one rose of each symbol
-        {
-            let mut has_rose = [false; 5];
-            for cl in &self.puzzle.cell_clues {
-                if let CellClue::Rose { symbol, .. } = cl {
-                    has_rose[*symbol as usize] = true;
-                }
+        let mut has_rose = [false; 8];
+        for cl in &self.puzzle.cell_clues {
+            if let CellClue::Rose { symbol, .. } = cl {
+                has_rose[*symbol as usize] = true;
             }
-            for sym in 0..5u8 {
-                if !has_rose[sym as usize] {
-                    continue;
-                }
-                for p in pieces {
-                    let cnt = p.cells.iter()
-                        .filter(|&&c| {
-                            self.puzzle.cell_clues.iter().any(|cl| {
-                                matches!(cl, CellClue::Rose { symbol, cell, .. } if *symbol == sym && *cell == c)
-                            })
+        }
+        for sym in 0..8u8 {
+            if !has_rose[sym as usize] {
+                continue;
+            }
+            for p in pieces {
+                let cnt = p.cells.iter()
+                    .filter(|&&c| {
+                        self.puzzle.cell_clues.iter().any(|cl| {
+                            matches!(cl, CellClue::Rose { symbol, cell, .. } if *symbol == sym && *cell == c)
                         })
-                        .count();
-                    if cnt != 1 {
-                        return false;
-                    }
+                    })
+                    .count();
+                if cnt != 1 {
+                    return false;
                 }
             }
         }
+        true
+    }
 
-        // Edge clues
+    fn validate_edge_clues(&self, pieces: &[Piece], cell_piece: &[usize]) -> bool {
         for clue in &self.puzzle.edge_clues {
             if self.edges[clue.edge] != EdgeState::Cut {
                 return false;
@@ -351,8 +377,10 @@ impl Solver {
                 }
             }
         }
+        true
+    }
 
-        // Vertex clues
+    fn validate_vertex_clues(&self, cell_piece: &[usize]) -> bool {
         for clue in &self.puzzle.vertex_clues {
             let (vi, vj) = self.grid.vertex_pos(clue.vertex);
             let distinct: HashSet<_> = self
@@ -367,7 +395,6 @@ impl Solver {
                 return false;
             }
         }
-
         true
     }
 }
