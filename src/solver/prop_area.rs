@@ -3,27 +3,40 @@ use crate::types::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 impl Solver {
-    /// Compute the maximum possible final size for a component.
-    /// If the component has a target area, returns that.
-    /// Otherwise, estimates by summing unique adjacent component sizes
-    /// through remaining Unknown growth edges, capped at eff_max_area.
-    fn growth_potential(&self, ci: usize) -> usize {
-        self.curr_target_area[ci].unwrap_or_else(|| {
-            let mut adj_sz: HashSet<usize> = HashSet::new();
-            for &ge in &self.growth_edges[ci] {
-                if self.edges[ge] != EdgeState::Unknown {
+    /// Compute an upper bound on the maximum possible final size for a component.
+    /// If the component has a target area, returns that exactly.
+    /// Otherwise, BFS through all non-Cut edges to find the total reachable cell
+    /// count (i.e. the size if all Unknown edges were Uncut), capped at eff_max_area.
+    /// This is always a true upper bound: the component can never grow beyond this.
+    fn growth_potential(&mut self, ci: usize) -> usize {
+        if let Some(target) = self.curr_target_area[ci] {
+            return target;
+        }
+        let n = self.grid.num_cells();
+        self.rose_visited[..n].fill(false);
+        self.q_buf.clear();
+        let mut reachable = 0usize;
+        for &c in &self.comp_cells[ci] {
+            self.rose_visited[c] = true;
+            self.q_buf.push(c);
+            reachable += 1;
+        }
+        while let Some(cur) = self.q_buf.pop() {
+            for eid in self.grid.cell_edges(cur).into_iter().flatten() {
+                if self.edges[eid] == EdgeState::Cut {
                     continue;
                 }
-                let (gc1, gc2) = self.grid.edge_cells(ge);
-                let other_ci = if self.curr_comp_id[gc1] == ci {
-                    self.curr_comp_id[gc2]
-                } else {
-                    self.curr_comp_id[gc1]
-                };
-                adj_sz.insert(self.curr_comp_sz[other_ci]);
+                let (c1, c2) = self.grid.edge_cells(eid);
+                let other = if c1 == cur { c2 } else { c1 };
+                if !self.grid.cell_exists[other] || self.rose_visited[other] {
+                    continue;
+                }
+                self.rose_visited[other] = true;
+                self.q_buf.push(other);
+                reachable += 1;
             }
-            (self.curr_comp_sz[ci] + adj_sz.iter().sum::<usize>()).min(self.eff_max_area)
-        })
+        }
+        reachable.min(self.eff_max_area)
     }
 
     /// Flood fill, assign component IDs, compute target areas,
@@ -716,11 +729,22 @@ impl Solver {
     }
 
     fn propagate_inequality_clues(&mut self, _num_comp: usize) -> Result<bool, ()> {
-        for clue in &self.puzzle.edge_clues {
-            let EdgeClueKind::Inequality { smaller_first } = clue.kind else {
-                continue;
-            };
-            let e = clue.edge;
+        // Collect inequality clues (edge, smaller_first) to avoid borrow conflict
+        // with growth_potential's mutable borrow of self.
+        let ineq_clues: Vec<(EdgeId, bool)> = self
+            .puzzle
+            .edge_clues
+            .iter()
+            .filter_map(|cl| {
+                if let EdgeClueKind::Inequality { smaller_first } = cl.kind {
+                    Some((cl.edge, smaller_first))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (e, smaller_first) in ineq_clues {
             if self.edges[e] != EdgeState::Cut {
                 continue;
             }
