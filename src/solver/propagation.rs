@@ -30,11 +30,7 @@ impl Solver {
                 // Failed literal detection (probing): probe each unknown edge
                 // to see if one value causes contradiction. in_probing guard
                 // prevents recursion when called from within a probe.
-                if !self.in_probing
-                    && self.rose_bits_all != 0
-                    && self.curr_unknown > 0
-                    && self.curr_unknown <= 256
-                {
+                if !self.in_probing && self.curr_unknown > 0 && self.curr_unknown <= 256 {
                     let saved = self.in_probing;
                     self.in_probing = true;
                     progress |= self.probe_one_round()?;

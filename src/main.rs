@@ -45,7 +45,10 @@ fn main() -> ExitCode {
     if count == 0 {
         println!("No solution");
     } else if count == 1 {
-        println!("Unique solution found ({:.1}s).", s.start_time.elapsed().as_secs_f64());
+        println!(
+            "Unique solution found ({:.1}s).",
+            s.start_time.elapsed().as_secs_f64()
+        );
     } else {
         println!("Multiple solutions found ({} shown above).", count);
     }
@@ -256,16 +259,22 @@ shape bank T L
                     s.mark_pre_cut(e);
                 }
                 let count = s.solve();
-                let first = formatter::format_solution(
-                    s.get_grid(),
-                    s.get_first_edges(),
-                    s.get_first_pieces(),
-                );
-                let best = formatter::format_solution(
-                    s.get_grid(),
-                    s.get_best_edges(),
-                    s.get_best_pieces(),
-                );
+                let (first, best) = if count == 0 {
+                    ("No solution".to_string(), "No solution".to_string())
+                } else {
+                    (
+                        formatter::format_solution(
+                            s.get_grid(),
+                            s.get_first_edges(),
+                            s.get_first_pieces(),
+                        ),
+                        formatter::format_solution(
+                            s.get_grid(),
+                            s.get_best_edges(),
+                            s.get_best_pieces(),
+                        ),
+                    )
+                };
                 let _ = tx.send((count, first, best));
             })
             .expect("failed to spawn thread");
