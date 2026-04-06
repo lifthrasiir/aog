@@ -4,6 +4,8 @@ use crate::types::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 impl Solver {
+    const MAX_COMPASS_PLACEMENTS: usize = 2000;
+
     pub(crate) fn generate_all_polyominoes(
         &self,
         start: CellId,
@@ -69,6 +71,175 @@ impl Solver {
             current.push(next);
             self.poly_rec(current, candidates, size, clue_at, results);
             current.pop();
+
+            for a in added {
+                candidates.remove(&a);
+            }
+        }
+    }
+
+    /// Generate all valid connected polyominoes containing `start` that satisfy
+    /// compass direction constraints. Unlike `generate_all_polyominoes`, this
+    /// does not require a fixed target size — it accepts any size where all
+    /// specified compass values are exactly matched.
+    pub(crate) fn generate_compass_polyominoes(
+        &self,
+        start: CellId,
+        compass: &CompassData,
+        clue_at: &[Option<usize>],
+    ) -> Vec<Vec<CellId>> {
+        let (cr, cc) = self.grid.cell_pos(start);
+        let (cr_i, cc_i) = (cr as isize, cc as isize);
+        let mut results = Vec::new();
+
+        let mut current = vec![start];
+        let mut counts = [0usize; 4]; // N=0, S=1, E=2, W=3
+
+        let mut candidates = BTreeSet::new();
+        for eid in self.grid.cell_edges(start).into_iter().flatten() {
+            if self.is_pre_cut[eid] {
+                continue;
+            }
+            let (c1, c2) = self.grid.edge_cells(eid);
+            let neighbor = if c1 == start { c2 } else { c1 };
+            if self.grid.cell_exists[neighbor] && clue_at[neighbor].is_none() {
+                candidates.insert(neighbor);
+            }
+        }
+
+        self.compass_rec(
+            &mut current,
+            &mut counts,
+            &mut candidates,
+            cr_i,
+            cc_i,
+            compass,
+            clue_at,
+            &mut results,
+        );
+        results
+    }
+
+    fn compass_rec(
+        &self,
+        current: &mut Vec<CellId>,
+        counts: &mut [usize; 4],
+        candidates: &mut BTreeSet<CellId>,
+        cr_i: isize,
+        cc_i: isize,
+        compass: &CompassData,
+        clue_at: &[Option<usize>],
+        results: &mut Vec<Vec<CellId>>,
+    ) {
+        // Check if any specified direction exceeds its compass value
+        if compass.n.map_or(false, |v| counts[0] > v)
+            || compass.s.map_or(false, |v| counts[1] > v)
+            || compass.e.map_or(false, |v| counts[2] > v)
+            || compass.w.map_or(false, |v| counts[3] > v)
+        {
+            return;
+        }
+
+        // Check if all specified compass values are exactly satisfied
+        let all_satisfied = compass.n.map_or(true, |v| counts[0] == v)
+            && compass.s.map_or(true, |v| counts[1] == v)
+            && compass.e.map_or(true, |v| counts[2] == v)
+            && compass.w.map_or(true, |v| counts[3] == v);
+
+        if all_satisfied {
+            let mut res = current.clone();
+            res.sort();
+            results.push(res);
+            // Don't return — can continue growing in unspecified directions
+        }
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        // Size cap: don't grow beyond eff_max_area or total_cells
+        let max_sz = self.eff_max_area.min(self.total_cells);
+        if current.len() >= max_sz {
+            return;
+        }
+
+        // Placement count cap
+        if results.len() >= Self::MAX_COMPASS_PLACEMENTS {
+            return;
+        }
+
+        let mut my_candidates = candidates.clone();
+        while let Some(&next) = my_candidates.iter().next() {
+            my_candidates.remove(&next);
+            candidates.remove(&next);
+
+            let (pr, pc) = self.grid.cell_pos(next);
+            let dr = pr as isize - cr_i;
+            let dc = pc as isize - cc_i;
+
+            let dir_idx = if dr < 0 {
+                0
+            } else if dr > 0 {
+                1
+            } else if dc > 0 {
+                2
+            } else {
+                3
+            };
+
+            // Check if this direction is already at its compass limit
+            let at_limit = match dir_idx {
+                0 => compass.n.map_or(false, |v| counts[0] >= v),
+                1 => compass.s.map_or(false, |v| counts[1] >= v),
+                2 => compass.e.map_or(false, |v| counts[2] >= v),
+                3 => compass.w.map_or(false, |v| counts[3] >= v),
+                _ => false,
+            };
+
+            // Find newly discovered neighbors (only reachable through next)
+            let mut added = Vec::new();
+            for eid in self.grid.cell_edges(next).into_iter().flatten() {
+                if self.is_pre_cut[eid] {
+                    continue;
+                }
+                let (c1, c2) = self.grid.edge_cells(eid);
+                let neighbor = if c1 == next { c2 } else { c1 };
+                if self.grid.cell_exists[neighbor]
+                    && clue_at[neighbor].is_none()
+                    && !current.contains(&neighbor)
+                    && !my_candidates.contains(&neighbor)
+                    && candidates.insert(neighbor)
+                {
+                    added.push(neighbor);
+                }
+            }
+
+            if at_limit {
+                // Can't add more cells in this direction.
+                // Remove newly discovered neighbors (only reachable through next).
+                for a in added {
+                    candidates.remove(&a);
+                }
+                continue;
+            }
+
+            // Size cap check
+            let max_sz = self.eff_max_area.min(self.total_cells);
+            if current.len() + 1 > max_sz {
+                for a in added {
+                    candidates.remove(&a);
+                }
+                continue;
+            }
+
+            // Add this cell and recurse
+            counts[dir_idx] += 1;
+            current.push(next);
+            self.compass_rec(
+                current, counts, candidates, cr_i, cc_i, compass, clue_at, results,
+            );
+            current.pop();
+            counts[dir_idx] -= 1;
 
             for a in added {
                 candidates.remove(&a);
@@ -178,6 +349,48 @@ impl Solver {
                                 ));
                             }
                         }
+                    }
+                }
+                CellClue::Compass { compass, .. } => {
+                    // Only include compass clues that are constraining enough
+                    // for placement enumeration. Loosely constrained clues
+                    // (1-2 specified directions without forcing a line shape)
+                    // generate too many placements and are better handled
+                    // by the edge-based search with propagation.
+                    let spec_count = [compass.n, compass.s, compass.e, compass.w]
+                        .iter()
+                        .filter(|x| x.is_some())
+                        .count();
+                    let forces_strip = (compass.e == Some(0) && compass.w == Some(0))
+                        || (compass.n == Some(0) && compass.s == Some(0));
+                    if spec_count < 3 && !forces_strip {
+                        continue;
+                    }
+                    let mut results =
+                        self.generate_compass_polyominoes(start_cell, compass, &clue_at);
+                    if results.len() > Self::MAX_COMPASS_PLACEMENTS {
+                        eprintln!(
+                            "compass clue at ({:?}): {} placements (too many, skipping clue)",
+                            self.grid.cell_pos(start_cell),
+                            results.len()
+                        );
+                        results.clear();
+                    }
+                    for cells in results {
+                        let area = cells.len();
+                        let sc: Vec<(i32, i32)> = cells
+                            .iter()
+                            .map(|&c| {
+                                let (r, col) = self.grid.cell_pos(c);
+                                (r as i32, col as i32)
+                            })
+                            .collect();
+                        let p = Piece {
+                            cells,
+                            area,
+                            canonical: canonical(&polyomino::make_shape(&sc)),
+                        };
+                        placements.push((clue_idx, p));
                     }
                 }
                 _ => {}

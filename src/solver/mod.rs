@@ -52,6 +52,8 @@ pub struct Solver {
     pub(crate) curr_comp_id: Vec<usize>,
     pub(crate) curr_comp_sz: Vec<usize>,
     pub(crate) curr_target_area: Vec<Option<usize>>,
+    pub(crate) curr_min_area: Vec<usize>,
+    pub(crate) curr_max_area: Vec<usize>,
     // Reusable buffers for propagation
     pub(crate) comp_buf: Vec<usize>,
     pub(crate) comp_buf2: Vec<usize>,
@@ -186,6 +188,8 @@ impl Solver {
             curr_comp_id: Vec::new(),
             curr_comp_sz: Vec::new(),
             curr_target_area: Vec::new(),
+            curr_min_area: Vec::new(),
+            curr_max_area: Vec::new(),
             comp_buf: vec![usize::MAX; nc],
             comp_buf2: Vec::new(),
             q_buf: Vec::with_capacity(nc),

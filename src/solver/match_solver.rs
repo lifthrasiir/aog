@@ -31,6 +31,20 @@ impl Solver {
                     self.puzzle.rules.shape_bank.iter().map(canonical).collect();
             }
             self.backtrack_pieces();
+        } else if self.has_compass_clue
+            && total_clue_area < self.total_cells
+            && self
+                .puzzle
+                .cell_clues
+                .iter()
+                .filter(|cl| matches!(cl, CellClue::Compass { .. }))
+                .count()
+                <= 8
+        {
+            self.solve_hybrid();
+            if self.solution_count == 0 {
+                self.backtrack_edges();
+            }
         } else if total_clue_area > 0 && self.should_try_hybrid(total_clue_area) {
             self.solve_hybrid();
         } else {
@@ -51,32 +65,42 @@ impl Solver {
         total_clue_area > self.total_cells * 2 / 3
     }
 
-    /// Hybrid search: enumerate placements for area-clue pieces, try
+    /// Hybrid search: enumerate placements for area/compass-clue pieces, try
     /// non-overlapping combinations, then edge-search the remaining cells.
     fn solve_hybrid(&mut self) {
         let placements = self.generate_clue_placements();
+        if placements.is_empty() {
+            return;
+        }
 
-        // Group by clue index
-        let num_clues = self
-            .puzzle
-            .cell_clues
-            .iter()
-            .filter(|cl| matches!(cl, CellClue::Area { .. }))
-            .count();
-        let mut groups: Vec<Vec<(usize, Vec<CellId>)>> = vec![Vec::new(); num_clues];
+        // Group by clue index using a map to handle non-contiguous indices
+        let max_idx = placements.iter().map(|&(idx, _)| idx).max().unwrap_or(0);
+        let mut groups: Vec<Vec<(usize, Vec<CellId>)>> = vec![Vec::new(); max_idx + 1];
         for (clue_idx, piece) in &placements {
             groups[*clue_idx].push((*clue_idx, piece.cells.clone()));
         }
 
-        for (i, g) in groups.iter().enumerate() {
-            eprintln!("clue {}: {} placements", i, g.len());
-            if g.is_empty() {
-                return; // no valid placements for this clue
+        // Collect non-empty group indices
+        let non_empty: Vec<usize> = (0..groups.len())
+            .filter(|&i| !groups[i].is_empty())
+            .collect();
+        let _num_clues = non_empty.len();
+
+        for &gi in &non_empty {
+            eprintln!("clue {}: {} placements", gi, groups[gi].len());
+        }
+        // If any clue that generated placements has none valid, abort
+        {
+            let has_placement: HashSet<usize> = placements.iter().map(|&(idx, _)| idx).collect();
+            for clue_idx in &has_placement {
+                if groups[*clue_idx].is_empty() {
+                    return;
+                }
             }
         }
 
         // Sort by fewest placements first (most constrained)
-        let mut order: Vec<usize> = (0..num_clues).collect();
+        let mut order: Vec<usize> = non_empty.clone();
         order.sort_by_key(|&i| groups[i].len());
 
         let n = self.grid.num_cells();
@@ -90,13 +114,13 @@ impl Solver {
         // instead of O(product of all placements).
         if self.solution_count == 1 {
             // Extract known cell sets per clue from the solution
-            let mut known: Vec<HashSet<CellId>> = vec![HashSet::new(); num_clues];
+            let mut known: Vec<HashSet<CellId>> = vec![HashSet::new(); max_idx + 1];
             for &(clue_idx, ref cells) in &solution {
                 known[clue_idx] = cells.iter().copied().collect();
             }
 
             // For each clue, try alternative placements while fixing others
-            for target_clue in 0..num_clues {
+            for &target_clue in &non_empty {
                 if self.solution_count >= 2 {
                     break;
                 }
