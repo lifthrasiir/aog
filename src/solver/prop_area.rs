@@ -449,6 +449,170 @@ impl Solver {
         Ok(progress)
     }
 
+    /// Check if two compass cells are incompatible (cannot be in the same piece).
+    /// Returns true if they cannot coexist in the same component.
+    fn compass_cells_incompatible(
+        &self,
+        ca: CellId,
+        pa: &CompassData,
+        cb: CellId,
+        pb: &CompassData,
+    ) -> bool {
+        let (ra, cola) = self.grid.cell_pos(ca);
+        let (rb, colb) = self.grid.cell_pos(cb);
+
+        // Zero-value direction conflicts
+        if pa.n == Some(0) && rb < ra {
+            return true;
+        }
+        if pb.n == Some(0) && ra < rb {
+            return true;
+        }
+        if pa.s == Some(0) && rb > ra {
+            return true;
+        }
+        if pb.s == Some(0) && ra > rb {
+            return true;
+        }
+        if pa.e == Some(0) && colb > cola {
+            return true;
+        }
+        if pb.e == Some(0) && cola > colb {
+            return true;
+        }
+        if pa.w == Some(0) && colb < cola {
+            return true;
+        }
+        if pb.w == Some(0) && cola < colb {
+            return true;
+        }
+
+        // Value ordering: North
+        if rb < ra {
+            if let (Some(vb), Some(va)) = (pb.n, pa.n) {
+                if vb >= va {
+                    return true;
+                }
+            }
+        } else if ra < rb {
+            if let (Some(va), Some(vb)) = (pa.n, pb.n) {
+                if va >= vb {
+                    return true;
+                }
+            }
+        } else if let (Some(va), Some(vb)) = (pa.n, pb.n) {
+            if va != vb {
+                return true;
+            }
+        }
+        // Value ordering: South
+        if rb > ra {
+            if let (Some(vb), Some(va)) = (pb.s, pa.s) {
+                if vb >= va {
+                    return true;
+                }
+            }
+        } else if ra > rb {
+            if let (Some(va), Some(vb)) = (pa.s, pb.s) {
+                if va >= vb {
+                    return true;
+                }
+            }
+        } else if let (Some(va), Some(vb)) = (pa.s, pb.s) {
+            if va != vb {
+                return true;
+            }
+        }
+        // Value ordering: East
+        if colb > cola {
+            if let (Some(vb), Some(va)) = (pb.e, pa.e) {
+                if vb >= va {
+                    return true;
+                }
+            }
+        } else if cola > colb {
+            if let (Some(va), Some(vb)) = (pa.e, pb.e) {
+                if va >= vb {
+                    return true;
+                }
+            }
+        } else if let (Some(va), Some(vb)) = (pa.e, pb.e) {
+            if va != vb {
+                return true;
+            }
+        }
+        // Value ordering: West
+        if colb < cola {
+            if let (Some(vb), Some(va)) = (pb.w, pa.w) {
+                if vb >= va {
+                    return true;
+                }
+            }
+        } else if cola < colb {
+            if let (Some(va), Some(vb)) = (pa.w, pb.w) {
+                if va >= vb {
+                    return true;
+                }
+            }
+        } else if let (Some(va), Some(vb)) = (pa.w, pb.w) {
+            if va != vb {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Pre-search compass incompatibility check.
+    /// For every pair of compass cells that are NOT yet in the same component,
+    /// check if they are incompatible. If so:
+    /// - If adjacent: force the edge between them to Cut
+    /// - If non-adjacent: add to manual_diffs
+    /// Returns the number of incompatibilities found.
+    pub(crate) fn init_compass_incompatibility(&mut self) -> usize {
+        // Collect all compass cells
+        let compass_cells: Vec<(CellId, CompassData)> = self
+            .puzzle
+            .cell_clues
+            .iter()
+            .filter_map(|cl| {
+                if let CellClue::Compass { cell, compass } = cl {
+                    if self.grid.cell_exists[*cell] {
+                        return Some((*cell, compass.clone()));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        let mut count = 0usize;
+        for i in 0..compass_cells.len() {
+            for j in (i + 1)..compass_cells.len() {
+                let (ca, pa) = &compass_cells[i];
+                let (cb, pb) = &compass_cells[j];
+
+                // Skip if already in the same component
+                if self.curr_comp_id[*ca] == self.curr_comp_id[*cb] {
+                    continue;
+                }
+
+                if self.compass_cells_incompatible(*ca, pa, *cb, pb) {
+                    count += 1;
+                    if let Some(eid) = self.grid.edge_between(*ca, *cb) {
+                        // Adjacent: force Cut
+                        if self.edges[eid] == EdgeState::Unknown {
+                            self.set_edge(eid, EdgeState::Cut);
+                        }
+                    } else {
+                        // Non-adjacent: add to manual_diffs
+                        self.manual_diffs.push((*ca, *cb));
+                    }
+                }
+            }
+        }
+        count
+    }
+
     fn propagate_compass_in_components(&mut self, num_comp: usize) -> Result<bool, ()> {
         // Compass bounds: prune and propagate based on compass clues
         let mut progress = false;
@@ -607,101 +771,8 @@ impl Solver {
                     for j in (i + 1)..ccomp.len() {
                         let (ca, pa) = &ccomp[i];
                         let (cb, pb) = &ccomp[j];
-                        let (ra, cola) = self.grid.cell_pos(*ca);
-                        let (rb, colb) = self.grid.cell_pos(*cb);
-
-                        if pa.n == Some(0) && rb < ra {
+                        if self.compass_cells_incompatible(*ca, pa, *cb, pb) {
                             return Err(());
-                        }
-                        if pb.n == Some(0) && ra < rb {
-                            return Err(());
-                        }
-                        if pa.s == Some(0) && rb > ra {
-                            return Err(());
-                        }
-                        if pb.s == Some(0) && ra > rb {
-                            return Err(());
-                        }
-                        if pa.e == Some(0) && colb > cola {
-                            return Err(());
-                        }
-                        if pb.e == Some(0) && cola > colb {
-                            return Err(());
-                        }
-                        if pa.w == Some(0) && colb < cola {
-                            return Err(());
-                        }
-                        if pb.w == Some(0) && cola < colb {
-                            return Err(());
-                        }
-
-                        if rb < ra {
-                            if let (Some(vb), Some(va)) = (pb.n, pa.n) {
-                                if vb >= va {
-                                    return Err(());
-                                }
-                            }
-                        } else if ra < rb {
-                            if let (Some(va), Some(vb)) = (pa.n, pb.n) {
-                                if va >= vb {
-                                    return Err(());
-                                }
-                            }
-                        } else if let (Some(va), Some(vb)) = (pa.n, pb.n) {
-                            if va != vb {
-                                return Err(());
-                            }
-                        }
-                        if rb > ra {
-                            if let (Some(vb), Some(va)) = (pb.s, pa.s) {
-                                if vb >= va {
-                                    return Err(());
-                                }
-                            }
-                        } else if ra > rb {
-                            if let (Some(va), Some(vb)) = (pa.s, pb.s) {
-                                if va >= vb {
-                                    return Err(());
-                                }
-                            }
-                        } else if let (Some(va), Some(vb)) = (pa.s, pb.s) {
-                            if va != vb {
-                                return Err(());
-                            }
-                        }
-                        if colb > cola {
-                            if let (Some(vb), Some(va)) = (pb.e, pa.e) {
-                                if vb >= va {
-                                    return Err(());
-                                }
-                            }
-                        } else if cola > colb {
-                            if let (Some(va), Some(vb)) = (pa.e, pb.e) {
-                                if va >= vb {
-                                    return Err(());
-                                }
-                            }
-                        } else if let (Some(va), Some(vb)) = (pa.e, pb.e) {
-                            if va != vb {
-                                return Err(());
-                            }
-                        }
-                        if colb < cola {
-                            if let (Some(vb), Some(va)) = (pb.w, pa.w) {
-                                if vb >= va {
-                                    return Err(());
-                                }
-                            }
-                        } else if cola < colb {
-                            if let (Some(va), Some(vb)) = (pa.w, pb.w) {
-                                if va >= vb {
-                                    return Err(());
-                                }
-                            }
-                        } else if let (Some(va), Some(vb)) = (pa.w, pb.w) {
-                            if va != vb {
-                                return Err(());
-                            }
                         }
                     }
                 }
@@ -1110,6 +1181,15 @@ impl Solver {
                 continue;
             }
             if self.curr_comp_id[c1] == self.curr_comp_id[c2] {
+                return Err(());
+            }
+        }
+
+        // Manual DIFF constraint check: if two cells declared as DIFF
+        // (from branching or compass incompatibility) have ended up in
+        // the same component, that's a contradiction.
+        for &(d1, d2) in &self.manual_diffs {
+            if self.curr_comp_id[d1] == self.curr_comp_id[d2] {
                 return Err(());
             }
         }

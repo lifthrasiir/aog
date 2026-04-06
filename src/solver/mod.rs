@@ -306,6 +306,21 @@ impl Solver {
             return 0;
         }
 
+        // Pre-search compass incompatibility: detect incompatible compass pairs
+        // and force edge cuts or add manual_diffs before search begins.
+        if self.has_compass_clue {
+            let n_incompat = self.init_compass_incompatibility();
+            if n_incompat > 0 {
+                eprintln!(
+                    "compass incompatibility: {} pairs forced DIFF",
+                    n_incompat
+                );
+                if self.propagate().is_err() {
+                    return 0;
+                }
+            }
+        }
+
         // Debug: count edges after propagation
         let n_cut = self.edges.iter().filter(|&&e| e == EdgeState::Cut).count();
         let n_uncut = self
