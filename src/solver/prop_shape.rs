@@ -138,11 +138,14 @@ impl Solver {
                         continue;
                     }
 
-                    // One side sealed: propagate size constraint to the other
+                    // Both still growing: cannot determine final shapes yet
+                    if !sealed1 && !sealed2 {
+                        continue;
+                    }
+
+                    // Exactly one side sealed: propagate size constraint to the other
                     let (sealed_ci, other_ci) = if sealed1 { (ci1, ci2) } else { (ci2, ci1) };
                     let sealed_sz = self.curr_comp_sz[sealed_ci];
-
-                    // Check for conflicting gemini size requirements
                     if let Some(prev) = gemini_required_size[other_ci] {
                         if prev != sealed_sz {
                             return Err(());
