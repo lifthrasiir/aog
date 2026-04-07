@@ -860,6 +860,240 @@ impl Solver {
                 // positives during intermediate propagation states. Probing handles
                 // this kind of global constraint checking more reliably.
             }
+
+            // Bridge/articulation-point based path forcing.
+            // For each component with unsatisfied compass directions, find bridge
+            // edges in the reachable subgraph. An Unknown bridge edge is forced Uncut
+            // if removing it would disconnect CI cells from cells in the unsatisfied direction.
+            // Skip during probing to avoid performance overhead on every probing propagation.
+            if !self.in_probing {
+                for ci in 0..num_comp {
+                    if !self.can_grow_buf[ci] {
+                        continue;
+                    }
+                    if compass_per_comp[ci].is_empty() {
+                        continue;
+                    }
+
+                    // Collect (dir_idx, target_count, compass_row, compass_col) for unsatisfied directions
+                    // dir_idx: 0=N, 1=S, 2=E, 3=W
+                    let mut unsatisfied: Vec<(usize, usize, isize, isize)> = Vec::new();
+                    for &(cell, ref compass) in &compass_per_comp[ci] {
+                        let (cr, cc) = self.grid.cell_pos(cell);
+                        let (cri, cci) = (cr as isize, cc as isize);
+                        let mut counts = [0usize; 4];
+                        for &c in &self.comp_cells[ci] {
+                            let (pr, pc) = self.grid.cell_pos(c);
+                            let dr = pr as isize - cri;
+                            let dc = pc as isize - cci;
+                            if dr < 0 {
+                                counts[0] += 1;
+                            }
+                            if dr > 0 {
+                                counts[1] += 1;
+                            }
+                            if dc > 0 {
+                                counts[2] += 1;
+                            }
+                            if dc < 0 {
+                                counts[3] += 1;
+                            }
+                        }
+                        for &(val, idx) in &[
+                            (compass.n, 0usize),
+                            (compass.s, 1),
+                            (compass.e, 2),
+                            (compass.w, 3),
+                        ] {
+                            let Some(v) = val else {
+                                continue;
+                            };
+                            if counts[idx] < v {
+                                unsatisfied.push((idx, v, cri, cci));
+                            }
+                        }
+                    }
+
+                    if unsatisfied.is_empty() {
+                        continue;
+                    }
+
+                    // Build reachable subgraph from CI via non-Cut edges (BFS)
+                    let nc = self.grid.num_cells();
+                    let mut local_id = vec![usize::MAX; nc];
+                    let mut local_cells: Vec<CellId> = Vec::new();
+
+                    let mut queue: VecDeque<CellId> = VecDeque::new();
+                    for &c in &self.comp_cells[ci] {
+                        if local_id[c] == usize::MAX {
+                            local_id[c] = local_cells.len();
+                            local_cells.push(c);
+                            queue.push_back(c);
+                        }
+                    }
+                    while let Some(cur) = queue.pop_front() {
+                        for eid in self.grid.cell_edges(cur).into_iter().flatten() {
+                            if self.edges[eid] == EdgeState::Cut {
+                                continue;
+                            }
+                            let (c1, c2) = self.grid.edge_cells(eid);
+                            let other = if c1 == cur { c2 } else { c1 };
+                            if !self.grid.cell_exists[other] {
+                                continue;
+                            }
+                            if local_id[other] == usize::MAX {
+                                local_id[other] = local_cells.len();
+                                local_cells.push(other);
+                                queue.push_back(other);
+                            }
+                        }
+                    }
+
+                    let n_local = local_cells.len();
+                    if n_local <= 1 {
+                        continue;
+                    }
+
+                    // Build undirected adjacency list for the reachable subgraph
+                    let mut adj: Vec<Vec<(usize, EdgeId)>> = vec![Vec::new(); n_local];
+                    for (li, &c) in local_cells.iter().enumerate() {
+                        for eid in self.grid.cell_edges(c).into_iter().flatten() {
+                            if self.edges[eid] == EdgeState::Cut {
+                                continue;
+                            }
+                            let (c1, c2) = self.grid.edge_cells(eid);
+                            let other = if c1 == c { c2 } else { c1 };
+                            let lj = local_id[other];
+                            if lj == usize::MAX {
+                                continue;
+                            }
+                            adj[li].push((lj, eid));
+                        }
+                    }
+
+                    // Iterative Tarjan bridge detection
+                    let mut disc = vec![usize::MAX; n_local];
+                    let mut low = vec![0usize; n_local];
+                    let mut parent_edge: Vec<Option<EdgeId>> = vec![None; n_local];
+                    let mut timer = 0usize;
+                    let mut bridges: Vec<EdgeId> = Vec::new();
+                    // dfs_stack entries: (node, adj_iterator_index)
+                    let mut dfs_stack: Vec<(usize, usize)> = Vec::new();
+
+                    for root in 0..n_local {
+                        if disc[root] != usize::MAX {
+                            continue;
+                        }
+                        disc[root] = timer;
+                        low[root] = timer;
+                        timer += 1;
+                        dfs_stack.push((root, 0));
+
+                        while !dfs_stack.is_empty() {
+                            let (u, adj_idx) = *dfs_stack.last().unwrap();
+                            if adj_idx < adj[u].len() {
+                                let (v, eid) = adj[u][adj_idx];
+                                dfs_stack.last_mut().unwrap().1 += 1;
+                                if disc[v] == usize::MAX {
+                                    // Tree edge: descend
+                                    parent_edge[v] = Some(eid);
+                                    disc[v] = timer;
+                                    low[v] = timer;
+                                    timer += 1;
+                                    dfs_stack.push((v, 0));
+                                } else if Some(eid) != parent_edge[u] {
+                                    // Back edge: update low
+                                    low[u] = low[u].min(disc[v]);
+                                }
+                            } else {
+                                // Done with u: propagate low to parent
+                                dfs_stack.pop();
+                                if let Some(&(p, _)) = dfs_stack.last() {
+                                    low[p] = low[p].min(low[u]);
+                                    if let Some(eid) = parent_edge[u] {
+                                        if low[u] > disc[p] {
+                                            bridges.push(eid);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // For each Unknown bridge, check if it separates CI cells from
+                    // cells needed for an unsatisfied compass direction
+                    for bridge_eid in bridges {
+                        if self.edges[bridge_eid] != EdgeState::Unknown {
+                            continue;
+                        }
+
+                        // BFS from CI cells in subgraph without the bridge
+                        let mut ci_side = vec![false; n_local];
+                        let mut bfs: VecDeque<usize> = VecDeque::new();
+                        for (i, &c) in local_cells.iter().enumerate() {
+                            if self.curr_comp_id[c] == ci {
+                                ci_side[i] = true;
+                                bfs.push_back(i);
+                            }
+                        }
+                        while let Some(u) = bfs.pop_front() {
+                            for &(v, eid) in &adj[u] {
+                                if eid == bridge_eid {
+                                    continue;
+                                }
+                                if !ci_side[v] {
+                                    ci_side[v] = true;
+                                    bfs.push_back(v);
+                                }
+                            }
+                        }
+
+                        // Force Uncut if CI side can't satisfy an unsatisfied direction
+                        // alone but the other side has cells in that direction
+                        let mut force_uncut = false;
+                        'dir_check: for &(dir_idx, v, cri, cci) in &unsatisfied {
+                            let mut ci_side_count = 0usize;
+                            let mut other_side_count = 0usize;
+
+                            for (i, &cell) in local_cells.iter().enumerate() {
+                                // Only count cells that could join ci:
+                                // ci's own cells and unassigned cells.
+                                // Cells in other components may have
+                                // incompatible constraints and should
+                                // not be assumed to join ci's piece.
+                                let cell_comp = self.curr_comp_id[cell];
+                                if cell_comp != ci && cell_comp != usize::MAX {
+                                    continue;
+                                }
+                                let (pr, pc) = self.grid.cell_pos(cell);
+                                let in_dir = match dir_idx {
+                                    0 => (pr as isize) < cri,
+                                    1 => (pr as isize) > cri,
+                                    2 => (pc as isize) > cci,
+                                    3 => (pc as isize) < cci,
+                                    _ => false,
+                                };
+                                if in_dir {
+                                    if ci_side[i] {
+                                        ci_side_count += 1;
+                                    } else {
+                                        other_side_count += 1;
+                                    }
+                                }
+                            }
+
+                            if ci_side_count < v && other_side_count > 0 {
+                                force_uncut = true;
+                                break 'dir_check;
+                            }
+                        }
+
+                        if force_uncut {
+                            compass_forced_uncuts.push(bridge_eid);
+                        }
+                    }
+                }
+            } // end if !self.in_probing
         }
 
         for &e in &compass_forced_cuts {
@@ -1360,8 +1594,12 @@ impl Solver {
             }
         }
 
-        let n = compass.n.or_else(|| if !has_north { Some(0) } else { None });
-        let s = compass.s.or_else(|| if !has_south { Some(0) } else { None });
+        let n = compass
+            .n
+            .or_else(|| if !has_north { Some(0) } else { None });
+        let s = compass
+            .s
+            .or_else(|| if !has_south { Some(0) } else { None });
         let e = compass.e.or_else(|| if !has_east { Some(0) } else { None });
         let w = compass.w.or_else(|| if !has_west { Some(0) } else { None });
 
