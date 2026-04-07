@@ -13,16 +13,21 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 3 {
-        eprintln!("Usage: aog [--solution-kill] [filename]");
+        eprintln!("Usage: aog [--parse | --solution-kill] [filename]");
         return ExitCode::from(1);
     }
 
+    let mut use_parse = false;
     let mut use_solution_kill = false;
-    let filename_idx = 1;
-    if args.len() > 1 && args[filename_idx] == "--solution-kill" {
-        use_solution_kill = true;
+    let mut filename_idx = 1;
+    if args.len() > 1 {
+        if args[1] == "--parse" {
+            use_parse = true;
+        } else if args[1] == "--solution-kill" {
+            use_solution_kill = true;
+        }
     }
-    let filename_idx = if use_solution_kill { 2 } else { 1 };
+    let filename_idx = if use_parse || use_solution_kill { 2 } else { 1 };
 
     let reader: Box<dyn std::io::BufRead> = if args.len() > filename_idx {
         let file = match File::open(&args[filename_idx]) {
@@ -40,6 +45,11 @@ fn main() -> ExitCode {
     if let Err(e) = p.parse(reader) {
         eprintln!("Failed to parse input: {e}");
         return ExitCode::from(1);
+    }
+
+    if use_parse {
+        println!("{}", formatter::format_parse_output(&p));
+        return ExitCode::SUCCESS;
     }
 
     let debug_known = if use_solution_kill {
