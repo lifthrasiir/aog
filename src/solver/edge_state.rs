@@ -9,6 +9,44 @@ impl Solver {
         if self.edges[e] != EdgeState::Unknown {
             return false;
         }
+        // Debug: detect when we're forcing an edge to a value that contradicts
+        // the known correct solution while still on the solution path.
+        if !self.debug_known_solution.is_empty()
+            && !self.in_probing
+            && e < self.debug_known_solution.len()
+            && self.debug_current_prop != "branch"
+        {
+            let known = self.debug_known_solution[e];
+            if known != EdgeState::Unknown && known != s {
+                // Check if all currently-set edges are consistent with known solution.
+                // If yes, this set_edge is the first kill of the solution path.
+                let on_path = self.edges.iter().enumerate().all(|(i, &curr)| {
+                    if curr == EdgeState::Unknown {
+                        return true;
+                    }
+                    if i >= self.debug_known_solution.len() {
+                        return true;
+                    }
+                    let k = self.debug_known_solution[i];
+                    k == EdgeState::Unknown || curr == k
+                });
+                if on_path {
+                    let (c1, c2) = self.grid.edge_cells(e);
+                    eprintln!(
+                        "SOLUTION_KILL: prop={} edge={} cells={:?}->{:?} \
+                         forced={:?} known={:?} depth={} unknown={}",
+                        self.debug_current_prop,
+                        e,
+                        self.grid.cell_pos(c1),
+                        self.grid.cell_pos(c2),
+                        s,
+                        known,
+                        self.search_depth,
+                        self.curr_unknown,
+                    );
+                }
+            }
+        }
         self.edges[e] = s;
         self.curr_unknown -= 1;
         self.changed.push((e, EdgeState::Unknown));
@@ -24,13 +62,11 @@ impl Solver {
             self.edges[e] = old_state;
         }
         self.manual_diffs.truncate(snap.manual_diffs);
-        self.manual_diff_set.retain(|pair| {
-            self.manual_diffs.iter().any(|d| *d == *pair)
-        });
+        self.manual_diff_set
+            .retain(|pair| self.manual_diffs.iter().any(|d| *d == *pair));
         self.manual_sames.truncate(snap.manual_sames);
-        self.manual_same_set.retain(|pair| {
-            self.manual_sames.iter().any(|d| *d == *pair)
-        });
+        self.manual_same_set
+            .retain(|pair| self.manual_sames.iter().any(|d| *d == *pair));
     }
 }
 

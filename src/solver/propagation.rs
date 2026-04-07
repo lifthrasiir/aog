@@ -2,29 +2,73 @@ use super::Solver;
 use crate::types::*;
 
 impl Solver {
+    /// Check if all currently-decided edges are consistent with the known solution.
+    /// Used for debug tracing of false contradictions.
+    fn on_solution_path(&self) -> bool {
+        if self.debug_known_solution.is_empty() || self.in_probing {
+            return false;
+        }
+        self.edges.iter().enumerate().all(|(i, &curr)| {
+            if curr == EdgeState::Unknown {
+                return true;
+            }
+            if i >= self.debug_known_solution.len() {
+                return true;
+            }
+            let k = self.debug_known_solution[i];
+            k == EdgeState::Unknown || curr == k
+        })
+    }
+
     pub(crate) fn propagate(&mut self) -> Result<bool, ()> {
         loop {
             let mut progress = false;
 
-            if self.puzzle.rules.bricky || self.puzzle.rules.loopy {
-                progress |= self.propagate_bricky_loopy()?;
+            macro_rules! run_prop {
+                ($name:literal, $cond:expr, $call:expr) => {
+                    if $cond {
+                        self.debug_current_prop = $name;
+                        let r = $call;
+                        if r.is_err() && self.on_solution_path() {
+                            eprintln!(
+                                "FALSE_ERR: prop={} depth={} unknown={}",
+                                $name, self.search_depth, self.curr_unknown
+                            );
+                        }
+                        progress |= r?;
+                    }
+                };
             }
-            if !self.puzzle.edge_clues.is_empty() {
-                progress |= self.propagate_delta_gemini_interaction()?;
-            }
-            progress |= self.propagate_area_bounds()?;
-            progress |= self.propagate_rose_separation()?;
-            progress |= self.propagate_rose_phase3()?;
-            if self.same_area_groups {
-                progress |= self.propagate_same_area_reachability()?;
-            }
-            if self.has_palisade_clue {
-                progress |= self.propagate_palisade_constraints()?;
-            }
-            if self.has_compass_clue {
-                progress |= self.propagate_compass()?;
-            }
-            progress |= self.propagate_watchtower()?;
+
+            run_prop!(
+                "bricky_loopy",
+                self.puzzle.rules.bricky || self.puzzle.rules.loopy,
+                self.propagate_bricky_loopy()
+            );
+            run_prop!(
+                "delta_gemini",
+                !self.puzzle.edge_clues.is_empty(),
+                self.propagate_delta_gemini_interaction()
+            );
+            run_prop!("area_bounds", true, self.propagate_area_bounds());
+            run_prop!("rose_sep", true, self.propagate_rose_separation());
+            run_prop!("rose_phase3", true, self.propagate_rose_phase3());
+            run_prop!(
+                "same_area_reach",
+                self.same_area_groups,
+                self.propagate_same_area_reachability()
+            );
+            run_prop!(
+                "palisade",
+                self.has_palisade_clue,
+                self.propagate_palisade_constraints()
+            );
+            run_prop!(
+                "compass_basic",
+                self.has_compass_clue,
+                self.propagate_compass()
+            );
+            run_prop!("watchtower", true, self.propagate_watchtower());
 
             if !progress {
                 // Failed literal detection (probing): probe each unknown edge
@@ -33,6 +77,7 @@ impl Solver {
                 if !self.in_probing && self.curr_unknown > 0 && self.curr_unknown <= 256 {
                     let saved = self.in_probing;
                     self.in_probing = true;
+                    self.debug_current_prop = "probe";
                     progress |= self.probe_one_round()?;
                     // Pair probing: for small unknown counts, probe pairs of
                     // edges sharing a vertex. Catches contradictions requiring

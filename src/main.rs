@@ -12,16 +12,23 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() > 2 {
-        eprintln!("Usage: aog [filename]");
+    if args.len() > 3 {
+        eprintln!("Usage: aog [--solution-kill] [filename]");
         return ExitCode::from(1);
     }
 
-    let reader: Box<dyn std::io::BufRead> = if args.len() == 2 {
-        let file = match File::open(&args[1]) {
+    let mut use_solution_kill = false;
+    let filename_idx = 1;
+    if args.len() > 1 && args[filename_idx] == "--solution-kill" {
+        use_solution_kill = true;
+    }
+    let filename_idx = if use_solution_kill { 2 } else { 1 };
+
+    let reader: Box<dyn std::io::BufRead> = if args.len() > filename_idx {
+        let file = match File::open(&args[filename_idx]) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("Failed to open '{}': {e}", args[1]);
+                eprintln!("Failed to open '{}': {e}", args[filename_idx]);
                 return ExitCode::from(1);
             }
         };
@@ -35,10 +42,30 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
+    let debug_known = if use_solution_kill {
+        match p.parse_solution_edges() {
+            Some(edges) => edges,
+            None => {
+                eprintln!("Error: no parseable solution found in the input file");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    if !debug_known.is_empty() {
+        eprintln!(
+            "Solution kill tracing enabled ({} edges from comment)",
+            debug_known.len()
+        );
+    }
+
     let mut s = solver::Solver::new(p.puzzle, p.grid);
     for e in p.pre_cut_edges {
         s.mark_pre_cut(e);
     }
+    s.debug_known_solution = debug_known;
 
     let count = s.solve();
 

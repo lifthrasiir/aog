@@ -615,6 +615,7 @@ impl Solver {
     }
 
     fn propagate_compass_in_components(&mut self, num_comp: usize) -> Result<bool, ()> {
+        self.debug_current_prop = "compass_in_comp";
         // Compass bounds: prune and propagate based on compass clues
         let mut progress = false;
         let mut compass_forced_cuts: Vec<EdgeId> = Vec::new();
@@ -1453,13 +1454,7 @@ impl Solver {
         }
 
         progress |= self.propagate_compass_in_components(num_comp)?;
-        {
-            let c13 = self.propagate_compass_placement_enumeration(num_comp);
-            if c13.is_err() {
-                eprintln!("C13 returned Err (no base_count_err printed above = set_edge failure or empty placements)");
-            }
-            progress |= c13?;
-        }
+        progress |= self.propagate_compass_placement_enumeration(num_comp)?;
         progress |= self.propagate_boxy_nonboxy(num_comp)?;
         progress |= self.propagate_inequality_clues(num_comp)?;
         progress |= self.propagate_diff_clues(num_comp)?;
@@ -1676,18 +1671,18 @@ impl Solver {
         (min_area, max_area, exact_area)
     }
 
-    /// C13: Tight compass placement enumeration for small-area components.
+    /// Tight compass placement enumeration for small-area components.
     /// For each growing compass component with max_area ≤ 8, finds all reachable
     /// components within the compass bounding box, then enumerates valid connected
     /// merges. Forces growth edges to Uncut/Cut based on whether neighboring
     /// components appear in all/no valid placements.
     fn propagate_compass_placement_enumeration(&mut self, _num_comp: usize) -> Result<bool, ()> {
-        //return Ok(false); // DEBUG: C13 disabled
+        self.debug_current_prop = "compass_place_enum";
         const MAX_AREA_THRESHOLD: usize = 8;
         const MAX_REACHABLE_COMPS: usize = 16;
         const MAX_PLACEMENTS: usize = 500;
 
-        // C13 is expensive (O(cells+edges) per compass clue); skip during probing.
+        // Enumeration is expensive (O(cells+edges) per compass clue); skip during probing.
         if self.in_probing {
             return Ok(false);
         }
@@ -1733,15 +1728,11 @@ impl Solver {
             let limits = [compass.n, compass.s, compass.e, compass.w];
 
             // Bounding box from compass constraints (tightest possible)
-            let bbox_min_r = limits[0]
-                .map_or(0isize, |v| cri - v as isize)
-                .max(0);
+            let bbox_min_r = limits[0].map_or(0isize, |v| cri - v as isize).max(0);
             let bbox_max_r = limits[1]
                 .map_or(self.grid.rows as isize - 1, |v| cri + v as isize)
                 .min(self.grid.rows as isize - 1);
-            let bbox_min_c = limits[3]
-                .map_or(0isize, |v| cci - v as isize)
-                .max(0);
+            let bbox_min_c = limits[3].map_or(0isize, |v| cci - v as isize).max(0);
             let bbox_max_c = limits[2]
                 .map_or(self.grid.cols as isize - 1, |v| cci + v as isize)
                 .min(self.grid.cols as isize - 1);
@@ -1872,7 +1863,7 @@ impl Solver {
                 })
             });
             if !can_grow && !has_outside_growth {
-                continue; // sealed within this propagation, skip C13 (handled elsewhere)
+                continue; // sealed within this propagation, skip enumeration (handled elsewhere)
             }
 
             // Compute per-component: directional counts and cell sizes
@@ -1903,7 +1894,7 @@ impl Solver {
             for d in 0..4 {
                 if let Some(v) = limits[d] {
                     if comp_dir_counts[0][d] > v {
-                        eprintln!("C13 base_count_err: compass={:?} dir={} count={} limit={}",
+                        eprintln!("Compass placement base_count_err: compass={:?} dir={} count={} limit={}",
                             self.grid.cell_pos(*cell), d, comp_dir_counts[0][d], v);
                         return Err(());
                     }
@@ -2007,7 +1998,7 @@ impl Solver {
 
                     let bit = 1u32 << lj;
                     if in_all & bit != 0 {
-                        eprintln!("C13 forced_uncut: compass={:?} comp0_cell={:?} other={:?} lj={} comp_dir={:?} valid={}",
+                        eprintln!("Compass placement forced_uncut: compass={:?} comp0_cell={:?} other={:?} lj={} comp_dir={:?} valid={}",
                             self.grid.cell_pos(*cell), self.grid.cell_pos(c), self.grid.cell_pos(other), lj,
                             comp_dir_counts[lj], valid_placements.len());
                         forced_uncuts.push((eid, *cell));
@@ -2016,7 +2007,6 @@ impl Solver {
                     }
                 }
             }
-
         }
 
         // Apply all forced edges
@@ -2026,8 +2016,12 @@ impl Solver {
                 let (ea, eb) = self.grid.edge_cells(e);
                 let pa = self.grid.cell_pos(ea);
                 let pb = self.grid.cell_pos(eb);
-                eprintln!("C13 forced_cut: compass={:?} cells={:?}-{:?}",
-                    self.grid.cell_pos(compass_c), pa, pb);
+                eprintln!(
+                    "Compass placement forced_cut: compass={:?} cells={:?}-{:?}",
+                    self.grid.cell_pos(compass_c),
+                    pa,
+                    pb
+                );
                 if !self.set_edge(e, EdgeState::Cut) {
                     return Err(());
                 }
@@ -2039,8 +2033,12 @@ impl Solver {
                 let (ea, eb) = self.grid.edge_cells(e);
                 let pa = self.grid.cell_pos(ea);
                 let pb = self.grid.cell_pos(eb);
-                eprintln!("C13 forced_uncut_apply: compass={:?} cells={:?}-{:?}",
-                    self.grid.cell_pos(compass_c), pa, pb);
+                eprintln!(
+                    "Compass placement forced_uncut_apply: compass={:?} cells={:?}-{:?}",
+                    self.grid.cell_pos(compass_c),
+                    pa,
+                    pb
+                );
                 if !self.set_edge(e, EdgeState::Uncut) {
                     return Err(());
                 }
@@ -2051,7 +2049,7 @@ impl Solver {
         Ok(progress)
     }
 
-    /// DFS for C13: enumerate all valid connected component merges.
+    /// DFS for compass placement enumeration: enumerate all valid connected component merges.
     /// Uses include/exclude branching on frontier components (smallest index first).
     /// Returns true if the result set overflowed (too many placements).
     fn compass_placement_dfs(

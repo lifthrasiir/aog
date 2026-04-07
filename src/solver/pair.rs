@@ -58,9 +58,7 @@ impl Solver {
             return true;
         }
         // Manual DIFFs from branching (use precomputed set for O(1) lookup)
-        if self.manual_diff_set.contains(&(c1, c2))
-            || self.manual_diff_set.contains(&(c2, c1))
-        {
+        if self.manual_diff_set.contains(&(c1, c2)) || self.manual_diff_set.contains(&(c2, c1)) {
             return true;
         }
         // Direct Cut edge between them
@@ -136,7 +134,10 @@ impl Solver {
 
     /// Select up to K independent compass membership pairs for flat branching.
     /// Returns pairs sorted by score (highest first).
-    pub(crate) fn select_compass_branches_flat(&mut self, max_pairs: usize) -> Vec<(CellId, CellId)> {
+    pub(crate) fn select_compass_branches_flat(
+        &mut self,
+        max_pairs: usize,
+    ) -> Vec<(CellId, CellId)> {
         if !self.has_compass_clue || self.curr_comp_id.is_empty() {
             return Vec::new();
         }
@@ -312,10 +313,7 @@ impl Solver {
 
                         let comp_has_compass = self.comp_cells[cur_ci].iter().any(|&c| {
                             self.cell_clues_indexed[c].iter().any(|&idx| {
-                                matches!(
-                                    &self.puzzle.cell_clues[idx],
-                                    CellClue::Compass { .. }
-                                )
+                                matches!(&self.puzzle.cell_clues[idx], CellClue::Compass { .. })
                             })
                         });
                         if comp_has_compass {
@@ -404,16 +402,15 @@ impl Solver {
         let (compass_cell, target_cell) = pairs[idx];
 
         // SAME branch: force via BFS path (dist==1 → single boundary edge forced).
-        let mut bfs_ok = false;
+        let bfs_ok;
         let mut same_prop_ok = false;
         {
             let snap = self.snapshot();
+            self.debug_current_prop = "flat_compass_same_bfs";
             bfs_ok = self.branch_pair_same(compass_cell, target_cell).is_ok();
-            if bfs_ok {
-                if self.propagate().is_ok() {
-                    same_prop_ok = true;
-                    self.branch_compass_flat_inner(pairs, idx + 1);
-                }
+            if bfs_ok && self.propagate().is_ok() {
+                same_prop_ok = true;
+                self.branch_compass_flat_inner(pairs, idx + 1);
             }
             self.restore(snap);
         }
@@ -422,8 +419,8 @@ impl Solver {
             return;
         }
 
-        // If BFS found a path but propagation failed, do NOT try DIFF.
-        // Propagation may have failed due to downstream errors (e.g. C13 over-
+        // If BFS found a path but propagation failed, do NOT try DIFF. Propagation
+        // may have failed due to downstream errors (e.g. compass placement over-
         // constraining), not because SAME is truly impossible.  Forcing DIFF in
         // that case can produce false no-solutions.  Skip this pair instead and
         // let edge branching resolve it.
@@ -438,6 +435,7 @@ impl Solver {
         // DIFF branch (BFS found no path, or SAME was already explored above).
         {
             let snap = self.snapshot();
+            self.debug_current_prop = "flat_compass_diff";
             self.manual_diffs.push((compass_cell, target_cell));
             self.manual_diff_set.insert((compass_cell, target_cell));
             if self.propagate().is_ok() {
@@ -456,6 +454,7 @@ impl Solver {
         if !in_same_comp {
             // --- Branch 1: SAME (force them into the same piece) ---
             let snap = self.snapshot();
+            self.debug_current_prop = "pair_same";
             if self.branch_pair_same(c1, c2).is_ok() {
                 if self.propagate().is_ok() {
                     self.backtrack_edges();
@@ -470,6 +469,7 @@ impl Solver {
 
         // --- Branch 2: DIFF (force them into different pieces) ---
         let snap = self.snapshot();
+        self.debug_current_prop = "pair_diff";
         self.manual_diffs.push((c1, c2));
         self.manual_diff_set.insert((c1, c2));
         if self.propagate().is_ok() {

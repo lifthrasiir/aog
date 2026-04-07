@@ -196,9 +196,7 @@ impl Solver {
             // Compass-aware edge selection bonuses
             if self.has_compass_clue {
                 // Bonus: edge adjacent to a compass cell
-                if !compass_adjacent.is_empty()
-                    && (compass_adjacent[c1] || compass_adjacent[c2])
-                {
+                if !compass_adjacent.is_empty() && (compass_adjacent[c1] || compass_adjacent[c2]) {
                     score += 40;
                 }
 
@@ -363,7 +361,8 @@ impl Solver {
             && self.has_compass_clue
             && self.rose_bits_all == 0
             && self.curr_unknown <= 80
-            && self.curr_unknown < self.total_unknown // not at search root
+            && self.curr_unknown < self.total_unknown
+        // not at search root
         {
             let max_pairs = if self.search_depth <= 2 { 5 } else { 2 };
             let pairs = self.select_compass_branches_flat(max_pairs);
@@ -393,6 +392,7 @@ impl Solver {
 
         for &val in order {
             let snap = self.snapshot();
+            self.debug_current_prop = "branch";
             if !self.set_edge(e, val) {
                 continue;
             }

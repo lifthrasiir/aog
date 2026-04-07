@@ -791,6 +791,85 @@ impl Parser {
             pre_cut_edges: Vec::new(),
         }
     }
+
+    /// Parse the solution embedded in the file's comment block.
+    ///
+    /// Looks for the first comment line matching `#\s*+` (a grid-like line),
+    /// then collects all `\d+` tokens from that line onward (only comment lines).
+    /// Assigns piece indices to existing cells in row-major order, then derives
+    /// edge states: Uncut if both adjacent cells share the same piece index,
+    /// Cut if they differ.  Returns None if no solution comment is found or
+    /// if the number of piece tokens doesn't match the number of existing cells.
+    pub fn parse_solution_edges(&self) -> Option<Vec<EdgeState>> {
+        // Find the first comment line that looks like a grid row: `#\s*+...`
+        let start = self.lines.iter().position(|l| {
+            let t = l.trim_start();
+            t.strip_prefix('#')
+                .map(|r| r.trim_start().starts_with('+'))
+                .unwrap_or(false)
+        })?;
+
+        // Collect all \d+ tokens from contiguous comment lines from `start`
+        let mut piece_tokens: Vec<usize> = Vec::new();
+        for line in &self.lines[start..] {
+            let t = line.trim_start();
+            let Some(inner) = t.strip_prefix('#') else {
+                break; // stop at first non-comment line
+            };
+            let bytes = inner.as_bytes();
+            let mut j = 0;
+            while j < bytes.len() {
+                if bytes[j].is_ascii_digit() {
+                    let s = j;
+                    while j < bytes.len() && bytes[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    if let Ok(n) = inner[s..j].parse::<usize>() {
+                        piece_tokens.push(n);
+                    }
+                } else {
+                    j += 1;
+                }
+            }
+        }
+
+        // Existing cells in row-major order
+        let existing: Vec<usize> = (0..self.grid.num_cells())
+            .filter(|&c| self.grid.cell_exists[c])
+            .collect();
+
+        if piece_tokens.len() != existing.len() {
+            return None;
+        }
+
+        // Assign piece index to each cell
+        let mut cell_piece = vec![usize::MAX; self.grid.num_cells()];
+        for (i, &c) in existing.iter().enumerate() {
+            cell_piece[c] = piece_tokens[i];
+        }
+
+        // Derive edge states from piece assignments
+        let num_edges = self.grid.num_edges();
+        let mut result = vec![EdgeState::Unknown; num_edges];
+        for e in 0..num_edges {
+            let (c1, c2) = self.grid.edge_cells(e);
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                continue; // boundary edge — leave Unknown
+            }
+            let p1 = cell_piece[c1];
+            let p2 = cell_piece[c2];
+            if p1 == usize::MAX || p2 == usize::MAX {
+                continue;
+            }
+            result[e] = if p1 == p2 {
+                EdgeState::Uncut
+            } else {
+                EdgeState::Cut
+            };
+        }
+
+        Some(result)
+    }
 }
 
 #[cfg(test)]

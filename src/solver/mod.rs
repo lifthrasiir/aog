@@ -109,6 +109,10 @@ pub struct Solver {
     pub(crate) search_depth: usize,
     // Solver start time for elapsed-time reporting
     pub(crate) start_time: std::time::Instant,
+    // Debug: known correct solution edge states (empty = disabled)
+    pub(crate) debug_known_solution: Vec<EdgeState>,
+    // Debug: name of current propagator (set before each set_edge call)
+    pub(crate) debug_current_prop: &'static str,
 }
 
 impl Solver {
@@ -228,6 +232,8 @@ impl Solver {
             manual_same_set: HashSet::new(),
             search_depth: 0,
             start_time: std::time::Instant::now(),
+            debug_known_solution: Vec::new(),
+            debug_current_prop: "init",
         }
     }
 
@@ -324,10 +330,7 @@ impl Solver {
         if self.has_compass_clue {
             let n_incompat = self.init_compass_incompatibility();
             if n_incompat > 0 {
-                eprintln!(
-                    "compass incompatibility: {} pairs forced DIFF",
-                    n_incompat
-                );
+                eprintln!("compass incompatibility: {} pairs forced DIFF", n_incompat);
                 if self.propagate().is_err() {
                     return 0;
                 }
