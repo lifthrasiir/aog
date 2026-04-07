@@ -777,6 +777,67 @@ impl Solver {
                     }
                 }
             }
+
+            // Compass bounding box propagation:
+            // For each component with compass clues, compute bounding box from
+            // compass values and cut growth edges leading outside it.
+            for ci in 0..num_comp {
+                if compass_per_comp[ci].is_empty() {
+                    continue;
+                }
+
+                let mut bbox_min_r = 0isize;
+                let mut bbox_max_r = self.grid.rows as isize - 1;
+                let mut bbox_min_c = 0isize;
+                let mut bbox_max_c = self.grid.cols as isize - 1;
+
+                for &(cell, ref compass) in &compass_per_comp[ci] {
+                    let (r, c) = self.grid.cell_pos(cell);
+                    let (ri, ci_col) = (r as isize, c as isize);
+
+                    // N=v: piece has v cells north of row r; connected path needs
+                    // at least v northward steps, so min_row >= r - v.
+                    if let Some(v) = compass.n {
+                        bbox_min_r = bbox_min_r.max(ri - v as isize);
+                    }
+                    if let Some(v) = compass.s {
+                        bbox_max_r = bbox_max_r.min(ri + v as isize);
+                    }
+                    if let Some(v) = compass.e {
+                        bbox_max_c = bbox_max_c.min(ci_col + v as isize);
+                    }
+                    if let Some(v) = compass.w {
+                        bbox_min_c = bbox_min_c.max(ci_col - v as isize);
+                    }
+                }
+
+                if bbox_min_r > bbox_max_r || bbox_min_c > bbox_max_c {
+                    return Err(());
+                }
+
+                // Cut growth edges whose target cell is outside the bounding box
+                let to_cut: Vec<EdgeId> = self.growth_edges[ci]
+                    .iter()
+                    .filter(|&&e| {
+                        if self.edges[e] != EdgeState::Unknown {
+                            return false;
+                        }
+                        let (c1, c2) = self.grid.edge_cells(e);
+                        let other = if self.curr_comp_id[c1] == ci { c2 } else { c1 };
+                        let (pr, pc) = self.grid.cell_pos(other);
+                        let (pri, pci) = (pr as isize, pc as isize);
+                        pri < bbox_min_r || pri > bbox_max_r || pci < bbox_min_c || pci > bbox_max_c
+                    })
+                    .copied()
+                    .collect();
+
+                for e in to_cut {
+                    if !self.set_edge(e, EdgeState::Cut) {
+                        return Err(());
+                    }
+                    progress = true;
+                }
+            }
         }
 
         for &e in &compass_forced_cuts {
