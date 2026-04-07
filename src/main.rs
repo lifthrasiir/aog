@@ -19,7 +19,6 @@ fn main() -> ExitCode {
 
     let mut use_parse = false;
     let mut use_solution_kill = false;
-    let mut filename_idx = 1;
     if args.len() > 1 {
         if args[1] == "--parse" {
             use_parse = true;
@@ -48,13 +47,33 @@ fn main() -> ExitCode {
     }
 
     if use_parse {
+        if let Some(solution_edges) = p.parse_solution_edges() {
+            let valid = solver::validate_parsed_solution(
+                &p.puzzle,
+                &p.grid,
+                &p.pre_cut_edges,
+                &solution_edges,
+            );
+            if !valid {
+                eprintln!("Error: parsed solution is INVALID (fails validation)");
+                return ExitCode::FAILURE;
+            }
+        }
         println!("{}", formatter::format_parse_output(&p));
         return ExitCode::SUCCESS;
     }
 
     let debug_known = if use_solution_kill {
         match p.parse_solution_edges() {
-            Some(edges) => edges,
+            Some(edges) => {
+                let valid =
+                    solver::validate_parsed_solution(&p.puzzle, &p.grid, &p.pre_cut_edges, &edges);
+                if !valid {
+                    eprintln!("Error: parsed solution is INVALID (fails validation)");
+                    return ExitCode::FAILURE;
+                }
+                edges
+            }
             None => {
                 eprintln!("Error: no parseable solution found in the input file");
                 return ExitCode::from(1);

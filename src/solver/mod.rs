@@ -15,6 +15,7 @@ mod prop_watchtower;
 mod propagation;
 pub(crate) mod shapes;
 mod validation;
+pub use validation::validate_parsed_solution;
 
 use crate::grid::Grid;
 use crate::types::*;

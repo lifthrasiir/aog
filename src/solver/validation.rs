@@ -1,7 +1,34 @@
 use super::Solver;
+use crate::grid::Grid;
 use crate::polyomino::{self, canonical, is_rectangular, Rotation};
 use crate::types::*;
 use std::collections::{HashSet, VecDeque};
+
+/// Validate a parsed solution (edge states) against the puzzle rules and clues.
+/// Creates a temporary solver, applies the edges, and runs the full validation.
+pub fn validate_parsed_solution(
+    puzzle: &Puzzle,
+    grid: &Grid,
+    pre_cut_edges: &[EdgeId],
+    solution_edges: &[EdgeState],
+) -> bool {
+    let mut s = Solver::new(puzzle.clone(), grid.clone());
+    for &e in pre_cut_edges {
+        s.mark_pre_cut(e);
+    }
+    for e in 0..grid.num_edges() {
+        if solution_edges[e] != EdgeState::Unknown {
+            s.edges[e] = solution_edges[e];
+        } else {
+            let (c1, c2) = grid.edge_cells(e);
+            if !grid.cell_exists[c1] || !grid.cell_exists[c2] {
+                s.edges[e] = EdgeState::Cut;
+            }
+        }
+    }
+    let pieces = s.compute_pieces();
+    s.validate(&pieces)
+}
 
 impl Solver {
     pub(crate) fn compute_pieces(&self) -> Vec<Piece> {
