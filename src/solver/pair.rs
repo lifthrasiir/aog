@@ -132,6 +132,284 @@ impl Solver {
         Ok(())
     }
 
+    // --- Compass membership branching ---
+
+    /// Select up to K independent compass membership pairs for flat branching.
+    /// Returns pairs sorted by score (highest first).
+    pub(crate) fn select_compass_branches_flat(&mut self, max_pairs: usize) -> Vec<(CellId, CellId)> {
+        if !self.has_compass_clue || self.curr_comp_id.is_empty() {
+            return Vec::new();
+        }
+
+        let n = self.grid.num_cells();
+        let num_comp = self.curr_comp_sz.len();
+
+        // Collect compass cells with non-empty compass data
+        let compass_cells: Vec<(CellId, CompassData)> = self
+            .puzzle
+            .cell_clues
+            .iter()
+            .filter_map(|cl| {
+                if let CellClue::Compass { cell, compass } = cl {
+                    if self.grid.cell_exists[*cell] {
+                        if compass.n.is_none()
+                            && compass.s.is_none()
+                            && compass.e.is_none()
+                            && compass.w.is_none()
+                        {
+                            return None;
+                        }
+                        let ci = self.curr_comp_id[*cell];
+                        if ci < num_comp && self.can_grow_buf[ci] {
+                            return Some((*cell, compass.clone()));
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+
+        if compass_cells.is_empty() {
+            return Vec::new();
+        }
+
+        // Collect all candidate pairs with scores
+        let mut candidates: Vec<(i32, CellId, CellId)> = Vec::new();
+
+        for &(compass_cell, ref compass) in &compass_cells {
+            let ci_compass = self.curr_comp_id[compass_cell];
+            let (cr, cc) = self.grid.cell_pos(compass_cell);
+            let (cr_i, cc_i) = (cr as isize, cc as isize);
+
+            // Precompute direction counts for compass cell's own component
+            let mut self_dir_counts = [0usize; 4];
+            for &c in &self.comp_cells[ci_compass] {
+                let (pr, pc) = self.grid.cell_pos(c);
+                if (pr as isize) < cr_i {
+                    self_dir_counts[0] += 1;
+                }
+                if (pr as isize) > cr_i {
+                    self_dir_counts[1] += 1;
+                }
+                if (pc as isize) > cc_i {
+                    self_dir_counts[2] += 1;
+                }
+                if (pc as isize) < cc_i {
+                    self_dir_counts[3] += 1;
+                }
+            }
+
+            // BFS from compass cell through Unknown+Uncut edges
+            self.rose_visited[..n].fill(false);
+            self.bfs_prev.resize(n, None);
+            self.rose_visited[compass_cell] = true;
+            self.q_buf.clear();
+            self.q_buf.push(compass_cell);
+
+            let mut seen_comps = vec![false; num_comp];
+            seen_comps[ci_compass] = true;
+
+            while let Some(cur) = self.q_buf.pop() {
+                let cur_ci = self.curr_comp_id[cur];
+
+                if cur_ci != ci_compass && cur_ci < num_comp && !seen_comps[cur_ci] {
+                    seen_comps[cur_ci] = true;
+
+                    if self.can_grow_buf[cur_ci] {
+                        let target_cell = self.comp_cells[cur_ci][0];
+                        if self.is_diff_inline(compass_cell, target_cell) {
+                            continue;
+                        }
+
+                        let mut dist = 0usize;
+                        let mut tmp = cur;
+                        while tmp != compass_cell {
+                            if let Some((p, _)) = self.bfs_prev[tmp] {
+                                dist += 1;
+                                tmp = p;
+                            } else {
+                                dist = usize::MAX;
+                                break;
+                            }
+                        }
+
+                        if dist > 6 {
+                            continue;
+                        }
+
+                        let mut tightness = 0i32;
+                        let mut would_contradict = false;
+
+                        let dirs: [(Option<usize>, usize); 4] = [
+                            (compass.n, 0),
+                            (compass.s, 1),
+                            (compass.e, 2),
+                            (compass.w, 3),
+                        ];
+
+                        let mut target_dir_counts = [0usize; 4];
+                        for &c in &self.comp_cells[cur_ci] {
+                            let (pr, pc) = self.grid.cell_pos(c);
+                            if (pr as isize) < cr_i {
+                                target_dir_counts[0] += 1;
+                            }
+                            if (pr as isize) > cr_i {
+                                target_dir_counts[1] += 1;
+                            }
+                            if (pc as isize) > cc_i {
+                                target_dir_counts[2] += 1;
+                            }
+                            if (pc as isize) < cc_i {
+                                target_dir_counts[3] += 1;
+                            }
+                        }
+
+                        for &(val, idx) in &dirs {
+                            let Some(v) = val else { continue };
+                            let combined = self_dir_counts[idx] + target_dir_counts[idx];
+                            if combined > v {
+                                would_contradict = true;
+                                break;
+                            } else if combined == v {
+                                tightness += 50;
+                            } else if combined == v - 1 {
+                                tightness += 30;
+                            }
+                        }
+
+                        if would_contradict {
+                            continue;
+                        }
+
+                        let mut score: i32 = 100 + tightness;
+
+                        if dist >= 2 && dist <= 4 {
+                            score += 30;
+                        } else if dist == 1 {
+                            score += 15;
+                        }
+
+                        let comp_has_compass = self.comp_cells[cur_ci].iter().any(|&c| {
+                            self.cell_clues_indexed[c].iter().any(|&idx| {
+                                matches!(
+                                    &self.puzzle.cell_clues[idx],
+                                    CellClue::Compass { .. }
+                                )
+                            })
+                        });
+                        if comp_has_compass {
+                            score += 60;
+                        }
+
+                        if self.curr_target_area[cur_ci].is_some() {
+                            score += 30;
+                        }
+
+                        if self.curr_comp_sz[cur_ci] >= 3 {
+                            score += 10;
+                        }
+
+                        if score >= 140 {
+                            candidates.push((score, compass_cell, cur));
+                        }
+                    }
+                }
+
+                // Expand BFS
+                for eid in self.grid.cell_edges(cur).into_iter().flatten() {
+                    if self.edges[eid] == EdgeState::Cut {
+                        continue;
+                    }
+                    let (c1, c2) = self.grid.edge_cells(eid);
+                    let other = if c1 == cur { c2 } else { c1 };
+                    if !self.grid.cell_exists[other] || self.rose_visited[other] {
+                        continue;
+                    }
+                    self.rose_visited[other] = true;
+                    self.bfs_prev[other] = Some((cur, eid));
+                    self.q_buf.push(other);
+                }
+            }
+        }
+
+        // Sort by score descending, select independent pairs
+        candidates.sort_by(|a, b| b.0.cmp(&a.0));
+
+        let mut selected: Vec<(CellId, CellId)> = Vec::new();
+        let mut used_compass: Vec<bool> = vec![false; n];
+        let mut used_comp: Vec<bool> = vec![false; num_comp];
+
+        for (_score, compass_cell, target_cell) in &candidates {
+            if selected.len() >= max_pairs {
+                break;
+            }
+            if used_compass[*compass_cell] {
+                continue;
+            }
+            let target_ci = self.curr_comp_id[*target_cell];
+            if used_comp[target_ci] {
+                continue;
+            }
+            let compass_ci = self.curr_comp_id[*compass_cell];
+            if used_comp[compass_ci] {
+                continue;
+            }
+
+            used_compass[*compass_cell] = true;
+            used_comp[target_ci] = true;
+            used_comp[compass_ci] = true;
+            selected.push((*compass_cell, *target_cell));
+        }
+
+        selected
+    }
+
+    /// Flat compass branching: make all compass membership decisions first,
+    /// then fall back to edge branching.
+    pub(crate) fn branch_compass_flat(&mut self, pairs: Vec<(CellId, CellId)>) {
+        self.branch_compass_flat_inner(&pairs, 0);
+    }
+
+    fn branch_compass_flat_inner(&mut self, pairs: &[(CellId, CellId)], idx: usize) {
+        if self.solution_count >= 2 {
+            return;
+        }
+
+        if idx >= pairs.len() {
+            self.backtrack_edges();
+            return;
+        }
+
+        let (compass_cell, target_cell) = pairs[idx];
+
+        // SAME branch
+        {
+            let snap = self.snapshot();
+            if self.branch_pair_same(compass_cell, target_cell).is_ok() {
+                if self.propagate().is_ok() {
+                    self.branch_compass_flat_inner(pairs, idx + 1);
+                }
+            }
+            self.restore(snap);
+        }
+
+        if self.solution_count >= 2 {
+            return;
+        }
+
+        // DIFF branch
+        {
+            let snap = self.snapshot();
+            self.manual_diffs.push((compass_cell, target_cell));
+            if self.propagate().is_ok() {
+                self.branch_compass_flat_inner(pairs, idx + 1);
+            }
+            self.restore(snap);
+        }
+    }
+
+    // --- Rose pair branching ---
+
     /// Branch on a rose cell pair (c1, c2): try SAME, then try DIFF.
     pub(crate) fn branch_on_pair(&mut self, c1: CellId, c2: CellId) {
         let in_same_comp = self.curr_comp_id[c1] == self.curr_comp_id[c2];

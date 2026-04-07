@@ -99,6 +99,8 @@ pub struct Solver {
     pub(crate) bfs_prev: Vec<Option<(CellId, EdgeId)>>,
     // Manual DIFF constraints from branching (c1, c2)
     pub(crate) manual_diffs: Vec<(CellId, CellId)>,
+    // Search recursion depth to limit compass branching to top level only
+    pub(crate) search_depth: usize,
     // Solver start time for elapsed-time reporting
     pub(crate) start_time: std::time::Instant,
 }
@@ -215,6 +217,7 @@ impl Solver {
             pair_layer: None,
             bfs_prev: Vec::new(),
             manual_diffs: Vec::new(),
+            search_depth: 0,
             start_time: std::time::Instant::now(),
         }
     }

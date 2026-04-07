@@ -749,6 +749,23 @@ impl Solver {
                         }
                     }
                 }
+
+                // Sealed component with unsatisfied compass constraint → contradiction.
+                // If the component can't grow but needs more cells in some direction,
+                // the compass requirement can never be met.
+                if !self.can_grow_buf[ci] {
+                    for &(val, idx) in &[
+                        (compass.n, 0),
+                        (compass.s, 1),
+                        (compass.e, 2),
+                        (compass.w, 3),
+                    ] {
+                        let Some(v) = val else { continue };
+                        if counts[idx] < v {
+                            return Err(());
+                        }
+                    }
+                }
             }
         }
 

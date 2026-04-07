@@ -224,24 +224,48 @@ impl Solver {
 
         self.node_count += 1;
         self.report_progress();
+        self.search_depth += 1;
 
         if self.curr_unknown == 0 {
             let pieces = self.compute_pieces();
             if self.validate(&pieces) {
                 // Deduplicate: skip if same edge assignment as previous solution
                 if self.solution_count > 0 && self.edges == self.best_edges {
+                    self.search_depth -= 1;
                     return;
                 }
                 self.save_solution(pieces);
             }
+            self.search_depth -= 1;
             return;
         }
 
         // Edge selection
         let (e, best_edge_score) = match self.select_edge() {
             Some((e, score)) => (e, score),
-            None => return,
+            None => {
+                self.search_depth -= 1;
+                return;
+            }
         };
+
+        // Compass membership branching: for compass-only puzzles (no rose),
+        // collect independent compass pairs and branch on all of them first.
+        // Run at shallow depths to catch new opportunities after edge decisions.
+        if self.search_depth <= 3
+            && self.has_compass_clue
+            && self.rose_bits_all == 0
+            && self.curr_unknown <= 80
+        {
+            let max_pairs = if self.search_depth == 1 { 5 } else { 2 };
+            let pairs = self.select_compass_branches_flat(max_pairs);
+            if !pairs.is_empty() {
+                eprintln!("compass branching depth={}: {} pairs", self.search_depth, pairs.len());
+                self.branch_compass_flat(pairs);
+                self.search_depth -= 1;
+                return;
+            }
+        }
 
         // Pair branching: for rose puzzles, try branching on cell pairs
         // before falling back to edge branching.
@@ -270,5 +294,7 @@ impl Solver {
             }
             self.restore(snap);
         }
+
+        self.search_depth -= 1;
     }
 }

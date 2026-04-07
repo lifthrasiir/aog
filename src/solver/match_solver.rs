@@ -31,7 +31,8 @@ impl Solver {
                     self.puzzle.rules.shape_bank.iter().map(canonical).collect();
             }
             self.backtrack_pieces();
-        } else if self.has_compass_clue
+        } else if total_clue_area > 0
+            && self.has_compass_clue
             && total_clue_area < self.total_cells
             && self
                 .puzzle
@@ -41,6 +42,10 @@ impl Solver {
                 .count()
                 <= 8
         {
+            // Hybrid with compass area targets: only when there are actual area
+            // clues (total_clue_area > 0). Compass-only puzzles (no area clues)
+            // are better solved by edge search with compass flat branching,
+            // since compass clues constrain geometry, not piece boundaries.
             self.solve_hybrid();
             if self.solution_count == 0 {
                 self.backtrack_edges();
