@@ -34,6 +34,12 @@ impl Solver {
                     let saved = self.in_probing;
                     self.in_probing = true;
                     progress |= self.probe_one_round()?;
+                    // Pair probing: for small unknown counts, probe pairs of
+                    // edges sharing a vertex. Catches contradictions requiring
+                    // two simultaneous decisions.
+                    if !progress && self.curr_unknown <= 10 {
+                        progress |= self.probe_pair_round()?;
+                    }
                     self.in_probing = saved;
                 }
 
@@ -82,6 +88,100 @@ impl Solver {
                 // Uncut contradicts -> force Cut
                 if self.edges[e] == EdgeState::Unknown && self.set_edge(e, EdgeState::Cut) {
                     return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Probe pairs of edges sharing a vertex. For each pair (e1, e2),
+    /// try all 4 combinations. If 3 contradict, force the 4th.
+    /// Only probes pairs where both edges are Unknown and share a vertex.
+    fn probe_pair_round(&mut self) -> Result<bool, ()> {
+        // Collect unknown edges
+        let unknowns: Vec<EdgeId> = (0..self.grid.num_edges())
+            .filter(|&e| self.edges[e] == EdgeState::Unknown)
+            .collect();
+
+        if unknowns.len() < 2 || unknowns.len() > 16 {
+            return Ok(false);
+        }
+
+        // Build vertex-to-edge mapping for pairing
+        let mut vert_edges: Vec<Vec<EdgeId>> = Vec::new();
+        for e in &unknowns {
+            let (is_h, r, c) = self.grid.decode_edge(*e);
+            let v1 = self.grid.vertex(r, c);
+            let v2 = if is_h {
+                self.grid.vertex(r + 1, c)
+            } else {
+                self.grid.vertex(r, c + 1)
+            };
+            while vert_edges.len() <= v1 {
+                vert_edges.push(Vec::new());
+            }
+            while vert_edges.len() <= v2 {
+                vert_edges.push(Vec::new());
+            }
+            vert_edges[v1].push(*e);
+            vert_edges[v2].push(*e);
+        }
+
+        // Probe pairs of edges sharing a vertex
+        let vals = [EdgeState::Cut, EdgeState::Uncut];
+        for v_edges in &vert_edges {
+            if v_edges.len() < 2 {
+                continue;
+            }
+            for i in 0..v_edges.len() {
+                let e1 = v_edges[i];
+                if self.edges[e1] != EdgeState::Unknown {
+                    continue;
+                }
+                for j in (i + 1)..v_edges.len() {
+                    let e2 = v_edges[j];
+                    if self.edges[e2] != EdgeState::Unknown {
+                        continue;
+                    }
+
+                    let mut ok_count = 0usize;
+                    let mut last_ok = (EdgeState::Cut, EdgeState::Cut);
+
+                    for &v1 in &vals {
+                        for &v2 in &vals {
+                            let snap = self.snapshot();
+                            let ok = self.set_edge(e1, v1)
+                                && self.set_edge(e2, v2)
+                                && self.propagate().is_ok();
+                            self.restore(snap);
+
+                            if ok {
+                                ok_count += 1;
+                                last_ok = (v1, v2);
+                            }
+                        }
+                    }
+
+                    if ok_count == 1 {
+                        // Only one combination works — force it
+                        let (v1, v2) = last_ok;
+                        if self.edges[e1] == EdgeState::Unknown {
+                            let _ = self.set_edge(e1, v1);
+                        }
+                        if self.edges[e2] == EdgeState::Unknown {
+                            let _ = self.set_edge(e2, v2);
+                        }
+                        return Ok(true);
+                    }
+                    if ok_count == 0 {
+                        // All combinations contradict — current state is invalid
+                        return Err(());
+                    }
+
+                    if self.edges[e1] != EdgeState::Unknown {
+                        break; // e1 was forced by a previous pair probe
+                    }
                 }
             }
         }

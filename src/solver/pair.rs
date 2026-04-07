@@ -57,11 +57,11 @@ impl Solver {
         if s1 != u8::MAX && s1 == s2 {
             return true;
         }
-        // Manual DIFFs from branching
-        for &(d1, d2) in &self.manual_diffs {
-            if (d1 == c1 && d2 == c2) || (d1 == c2 && d2 == c1) {
-                return true;
-            }
+        // Manual DIFFs from branching (use precomputed set for O(1) lookup)
+        if self.manual_diff_set.contains(&(c1, c2))
+            || self.manual_diff_set.contains(&(c2, c1))
+        {
+            return true;
         }
         // Direct Cut edge between them
         for eid in self.grid.cell_edges(c1).into_iter().flatten() {
@@ -283,6 +283,23 @@ impl Solver {
 
                         let mut score: i32 = 100 + tightness;
 
+                        // Bonus: target component contributes cells to a
+                        // compass-constrained below-limit direction. This means
+                        // the SAME branch creates meaningful pruning power.
+                        let mut constrained_contribution = false;
+                        for &(val, idx) in &dirs {
+                            let Some(v) = val else { continue };
+                            let combined = self_dir_counts[idx] + target_dir_counts[idx];
+                            if combined < v && target_dir_counts[idx] > 0 {
+                                constrained_contribution = true;
+                                score += 40;
+                            }
+                        }
+                        // Penalty: target doesn't help any constrained direction
+                        if !constrained_contribution {
+                            score -= 30;
+                        }
+
                         if dist >= 2 && dist <= 4 {
                             score += 30;
                         } else if dist == 1 {
@@ -401,6 +418,7 @@ impl Solver {
         {
             let snap = self.snapshot();
             self.manual_diffs.push((compass_cell, target_cell));
+            self.manual_diff_set.insert((compass_cell, target_cell));
             if self.propagate().is_ok() {
                 self.branch_compass_flat_inner(pairs, idx + 1);
             }
@@ -432,6 +450,7 @@ impl Solver {
         // --- Branch 2: DIFF (force them into different pieces) ---
         let snap = self.snapshot();
         self.manual_diffs.push((c1, c2));
+        self.manual_diff_set.insert((c1, c2));
         if self.propagate().is_ok() {
             self.backtrack_edges();
         }

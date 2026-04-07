@@ -13,12 +13,14 @@ impl Solver {
             return None;
         }
 
+        let num_comp = self.curr_comp_sz.len();
+
         // Precompute clue-constrained components: components adjacent to any
         // clue edge (inequality, diff, gemini, delta). These components have
         // shape or size constraints from edge clues.
         let has_clue_edges = !self.clue_cut_edges.is_empty();
         let mut clue_constrained_comp: Vec<bool> = if has_clue_edges {
-            vec![false; self.curr_comp_sz.len()]
+            vec![false; num_comp]
         } else {
             Vec::new()
         };
@@ -37,6 +39,81 @@ impl Solver {
                 clue_constrained_comp[ci2] = true;
             }
         }
+
+        // Precompute compass info per component:
+        // - comp_has_compass: component has at least one compass clue
+        // - comp_compass_count: number of compass clues in component
+        // - comp_dir_at_limit: component has a compass direction at its value limit
+        let (_comp_has_compass, comp_compass_count, comp_dir_at_limit) =
+            if self.has_compass_clue && !self.curr_comp_id.is_empty() {
+                let mut has_compass = vec![false; num_comp];
+                let mut compass_count = vec![0u8; num_comp];
+                let mut dir_at_limit = vec![false; num_comp];
+                for cl in &self.puzzle.cell_clues {
+                    if let CellClue::Compass { cell, compass } = cl {
+                        if !self.grid.cell_exists[*cell] {
+                            continue;
+                        }
+                        let ci = self.curr_comp_id[*cell];
+                        if ci == usize::MAX || ci >= num_comp {
+                            continue;
+                        }
+                        has_compass[ci] = true;
+                        compass_count[ci] += 1;
+                        // Check if any direction is at its compass limit
+                        let (cr, cc) = self.grid.cell_pos(*cell);
+                        let (cr_i, cc_i) = (cr as isize, cc as isize);
+                        let counts: [usize; 4] = [
+                            self.comp_cells[ci]
+                                .iter()
+                                .filter(|&&c| (self.grid.cell_pos(c).0 as isize) < cr_i)
+                                .count(),
+                            self.comp_cells[ci]
+                                .iter()
+                                .filter(|&&c| (self.grid.cell_pos(c).0 as isize) > cr_i)
+                                .count(),
+                            self.comp_cells[ci]
+                                .iter()
+                                .filter(|&&c| (self.grid.cell_pos(c).1 as isize) > cc_i)
+                                .count(),
+                            self.comp_cells[ci]
+                                .iter()
+                                .filter(|&&c| (self.grid.cell_pos(c).1 as isize) < cc_i)
+                                .count(),
+                        ];
+                        for &(val, cnt) in &[
+                            (compass.n, counts[0]),
+                            (compass.s, counts[1]),
+                            (compass.e, counts[2]),
+                            (compass.w, counts[3]),
+                        ] {
+                            if let Some(v) = val {
+                                if cnt == v {
+                                    dir_at_limit[ci] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                (has_compass, compass_count, dir_at_limit)
+            } else {
+                (vec![], vec![], vec![])
+            };
+
+        // Precompute compass-adjacent cells for edge bonus
+        let compass_adjacent: Vec<bool> = if self.has_compass_clue {
+            let mut adj = vec![false; self.grid.num_cells()];
+            for cl in &self.puzzle.cell_clues {
+                if let CellClue::Compass { cell, .. } = cl {
+                    if self.grid.cell_exists[*cell] {
+                        adj[*cell] = true;
+                    }
+                }
+            }
+            adj
+        } else {
+            Vec::new()
+        };
 
         let mut best_e = None;
         let mut best_score = i32::MIN;
@@ -113,6 +190,36 @@ impl Solver {
                 if self.watchtower_vertices.contains(&v1) || self.watchtower_vertices.contains(&v2)
                 {
                     score += 25;
+                }
+            }
+
+            // Compass-aware edge selection bonuses
+            if self.has_compass_clue {
+                // Bonus: edge adjacent to a compass cell
+                if !compass_adjacent.is_empty()
+                    && (compass_adjacent[c1] || compass_adjacent[c2])
+                {
+                    score += 40;
+                }
+
+                // Bonus: growth edge of component with compass direction at limit
+                if !comp_dir_at_limit.is_empty() {
+                    if ci1 < comp_dir_at_limit.len() && comp_dir_at_limit[ci1] {
+                        score += 60;
+                    }
+                    if ci2 < comp_dir_at_limit.len() && comp_dir_at_limit[ci2] {
+                        score += 60;
+                    }
+                }
+
+                // Bonus: component with multiple compass clues
+                if !comp_compass_count.is_empty() {
+                    if ci1 < comp_compass_count.len() && comp_compass_count[ci1] >= 2 {
+                        score += 30;
+                    }
+                    if ci2 < comp_compass_count.len() && comp_compass_count[ci2] >= 2 {
+                        score += 30;
+                    }
                 }
             }
 
@@ -257,10 +364,9 @@ impl Solver {
             && self.rose_bits_all == 0
             && self.curr_unknown <= 80
         {
-            let max_pairs = if self.search_depth == 1 { 5 } else { 2 };
+            let max_pairs = if self.search_depth <= 2 { 5 } else { 2 };
             let pairs = self.select_compass_branches_flat(max_pairs);
             if !pairs.is_empty() {
-                eprintln!("compass branching depth={}: {} pairs", self.search_depth, pairs.len());
                 self.branch_compass_flat(pairs);
                 self.search_depth -= 1;
                 return;

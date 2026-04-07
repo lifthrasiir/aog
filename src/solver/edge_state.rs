@@ -24,6 +24,9 @@ impl Solver {
             self.edges[e] = old_state;
         }
         self.manual_diffs.truncate(snap.manual_diffs);
+        self.manual_diff_set.retain(|pair| {
+            self.manual_diffs.iter().any(|d| *d == *pair)
+        });
     }
 }
 

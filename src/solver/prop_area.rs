@@ -606,6 +606,7 @@ impl Solver {
                     } else {
                         // Non-adjacent: add to manual_diffs
                         self.manual_diffs.push((*ca, *cb));
+                        self.manual_diff_set.insert((*ca, *cb));
                     }
                 }
             }
@@ -854,6 +855,10 @@ impl Solver {
                     }
                     progress = true;
                 }
+
+                // NOTE: Compass reachability check was attempted but caused false
+                // positives during intermediate propagation states. Probing handles
+                // this kind of global constraint checking more reliably.
             }
         }
 
@@ -1303,22 +1308,62 @@ impl Solver {
     ) -> (usize, Option<usize>, Option<usize>) {
         let (r, c) = self.grid.cell_pos(cell);
 
-        let n = compass.n.or_else(|| if r == 0 { Some(0) } else { None });
-        let s = compass.s.or_else(|| {
-            if r == self.grid.rows - 1 {
-                Some(0)
-            } else {
-                None
+        // Infer 0 for directions where no cells exist in the grid.
+        // Check actual cell existence, not just row/col boundaries,
+        // to handle non-rectangular grids (diamonds, irregular shapes).
+        let mut has_north = false;
+        let mut has_south = false;
+        let mut has_east = false;
+        let mut has_west = false;
+        for dr in 1..self.grid.rows {
+            let nr = r as isize - dr as isize;
+            if nr < 0 {
+                break;
             }
-        });
-        let e = compass.e.or_else(|| {
-            if c == self.grid.cols - 1 {
-                Some(0)
-            } else {
-                None
+            let nid = self.grid.cell_id(nr as usize, c);
+            if self.grid.cell_exists[nid] {
+                has_north = true;
+                break;
             }
-        });
-        let w = compass.w.or_else(|| if c == 0 { Some(0) } else { None });
+        }
+        for dr in 1..self.grid.rows {
+            let sr = r + dr;
+            if sr >= self.grid.rows {
+                break;
+            }
+            let sid = self.grid.cell_id(sr, c);
+            if self.grid.cell_exists[sid] {
+                has_south = true;
+                break;
+            }
+        }
+        for dc in 1..self.grid.cols {
+            let ec = c + dc;
+            if ec >= self.grid.cols {
+                break;
+            }
+            let eid = self.grid.cell_id(r, ec);
+            if self.grid.cell_exists[eid] {
+                has_east = true;
+                break;
+            }
+        }
+        for dc in 1..self.grid.cols {
+            let wc = c as isize - dc as isize;
+            if wc < 0 {
+                break;
+            }
+            let wid = self.grid.cell_id(r, wc as usize);
+            if self.grid.cell_exists[wid] {
+                has_west = true;
+                break;
+            }
+        }
+
+        let n = compass.n.or_else(|| if !has_north { Some(0) } else { None });
+        let s = compass.s.or_else(|| if !has_south { Some(0) } else { None });
+        let e = compass.e.or_else(|| if !has_east { Some(0) } else { None });
+        let w = compass.w.or_else(|| if !has_west { Some(0) } else { None });
 
         let nv = n.unwrap_or(0);
         let sv = s.unwrap_or(0);
