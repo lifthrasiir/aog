@@ -24,6 +24,7 @@ use std::collections::HashSet;
 pub struct Snapshot {
     pub edges: usize,
     pub manual_diffs: usize,
+    pub manual_sames: usize,
 }
 
 pub struct Solver {
@@ -101,6 +102,9 @@ pub struct Solver {
     pub(crate) manual_diffs: Vec<(CellId, CellId)>,
     // Precomputed set of manual DIFF pairs for fast lookup
     pub(crate) manual_diff_set: HashSet<(CellId, CellId)>,
+    // Manual SAME constraints from branching (c1, c2 must be in same piece)
+    pub(crate) manual_sames: Vec<(CellId, CellId)>,
+    pub(crate) manual_same_set: HashSet<(CellId, CellId)>,
     // Search recursion depth to limit compass branching to top level only
     pub(crate) search_depth: usize,
     // Solver start time for elapsed-time reporting
@@ -220,6 +224,8 @@ impl Solver {
             bfs_prev: Vec::new(),
             manual_diffs: Vec::new(),
             manual_diff_set: HashSet::new(),
+            manual_sames: Vec::new(),
+            manual_same_set: HashSet::new(),
             search_depth: 0,
             start_time: std::time::Instant::now(),
         }
@@ -237,6 +243,7 @@ impl Solver {
         Snapshot {
             edges: self.changed.len(),
             manual_diffs: self.manual_diffs.len(),
+            manual_sames: self.manual_sames.len(),
         }
     }
 

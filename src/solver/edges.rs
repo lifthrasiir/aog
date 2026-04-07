@@ -363,6 +363,7 @@ impl Solver {
             && self.has_compass_clue
             && self.rose_bits_all == 0
             && self.curr_unknown <= 80
+            && self.curr_unknown < self.total_unknown // not at search root
         {
             let max_pairs = if self.search_depth <= 2 { 5 } else { 2 };
             let pairs = self.select_compass_branches_flat(max_pairs);

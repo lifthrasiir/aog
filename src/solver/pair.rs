@@ -233,7 +233,11 @@ impl Solver {
                             }
                         }
 
-                        if dist > 6 {
+                        // Only allow directly-adjacent components (dist == 1).
+                        // For dist > 1, the BFS path passes through intermediate
+                        // components; forcing the entire path merges them all,
+                        // which can cause false contradictions in SAME branch.
+                        if dist != 1 {
                             continue;
                         }
 
@@ -399,11 +403,15 @@ impl Solver {
 
         let (compass_cell, target_cell) = pairs[idx];
 
-        // SAME branch
+        // SAME branch: force via BFS path (dist==1 → single boundary edge forced).
+        let mut bfs_ok = false;
+        let mut same_prop_ok = false;
         {
             let snap = self.snapshot();
-            if self.branch_pair_same(compass_cell, target_cell).is_ok() {
+            bfs_ok = self.branch_pair_same(compass_cell, target_cell).is_ok();
+            if bfs_ok {
                 if self.propagate().is_ok() {
+                    same_prop_ok = true;
                     self.branch_compass_flat_inner(pairs, idx + 1);
                 }
             }
@@ -414,7 +422,20 @@ impl Solver {
             return;
         }
 
-        // DIFF branch
+        // If BFS found a path but propagation failed, do NOT try DIFF.
+        // Propagation may have failed due to downstream errors (e.g. C13 over-
+        // constraining), not because SAME is truly impossible.  Forcing DIFF in
+        // that case can produce false no-solutions.  Skip this pair instead and
+        // let edge branching resolve it.
+        //
+        // If BFS found no path the cells are fully isolated → SAME is provably
+        // impossible, so DIFF is the only option.
+        if bfs_ok && !same_prop_ok {
+            self.branch_compass_flat_inner(pairs, idx + 1);
+            return;
+        }
+
+        // DIFF branch (BFS found no path, or SAME was already explored above).
         {
             let snap = self.snapshot();
             self.manual_diffs.push((compass_cell, target_cell));

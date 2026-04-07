@@ -27,6 +27,10 @@ impl Solver {
         self.manual_diff_set.retain(|pair| {
             self.manual_diffs.iter().any(|d| *d == *pair)
         });
+        self.manual_sames.truncate(snap.manual_sames);
+        self.manual_same_set.retain(|pair| {
+            self.manual_sames.iter().any(|d| *d == *pair)
+        });
     }
 }
 

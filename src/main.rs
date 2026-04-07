@@ -43,7 +43,10 @@ fn main() -> ExitCode {
     let count = s.solve();
 
     if count == 0 {
-        println!("No solution");
+        println!(
+            "No solution ({:.1}s).",
+            s.start_time.elapsed().as_secs_f64()
+        );
     } else if count == 1 {
         println!(
             "Unique solution found ({:.1}s).",
