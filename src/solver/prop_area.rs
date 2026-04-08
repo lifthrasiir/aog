@@ -1571,6 +1571,27 @@ impl Solver {
                 if self.curr_comp_sz[ci] < t && !self.can_grow_buf[ci] {
                     return Err(());
                 }
+                // Growth potential check: if the component can grow but
+                // its maximum possible size (flood fill through non-Cut
+                // edges, capped at max_area) is less than the target,
+                // the target can never be reached → contradiction.
+                // Only check when nearly sealed (few growth options) to
+                // limit overhead. Skip during probing.
+                if !self.in_probing
+                    && self.can_grow_buf[ci]
+                    && self.curr_comp_sz[ci] < t
+                {
+                    let unk_growth = self.growth_edges[ci]
+                        .iter()
+                        .filter(|&&e| self.edges[e] == EdgeState::Unknown)
+                        .count();
+                    if unk_growth <= 4 {
+                        let potential = self.growth_potential(ci);
+                        if potential < t {
+                            return Err(());
+                        }
+                    }
+                }
                 if self.curr_comp_sz[ci] == t && self.can_grow_buf[ci] {
                     let to_cut: Vec<EdgeId> = self.growth_edges[ci]
                         .iter()
@@ -1682,7 +1703,247 @@ impl Solver {
 
         let progress = self.propagate_area_constraints(num_comp)?;
         self.propagate_shape_constraints(num_comp)?;
+        self.check_complement_feasibility(num_comp)?;
         Ok(progress)
+    }
+
+    /// Complement feasibility check: after removing sealed component cells,
+    /// verify that each connected region of remaining (non-sealed) cells
+    /// can form at least one valid piece.
+    ///
+    /// A region of non-sealed cells (connected via non-Cut edges) must have
+    /// size >= the maximum per-component min_area within it. If a sealed
+    /// component splits the grid such that the remaining cells form a pocket
+    /// too small for the most demanding component in it, that's a contradiction.
+    ///
+    /// Also checks compass-aware isolation: for each compass cell, computes
+    /// the maximum reach in each specified direction. Cells outside all compass
+    /// reaches that form a connected group with size < max_component_min_area
+    /// in their region are contradictions (trapped by compass constraints).
+    fn check_complement_feasibility(&mut self, num_comp: usize) -> Result<(), ()> {
+        if self.in_probing {
+            return Ok(());
+        }
+
+        // Quick check: need at least one sealed component
+        let mut has_sealed = false;
+        for ci in 0..num_comp {
+            if !self.can_grow_buf[ci] {
+                has_sealed = true;
+                break;
+            }
+        }
+        if !has_sealed {
+            return Ok(());
+        }
+
+        let n = self.grid.num_cells();
+
+        // Phase 1: Region-based check.
+        // Find connected regions of non-sealed cells via non-Cut edges.
+        // For each region, verify it can accommodate the most demanding component.
+        // Reuse comp_buf as visited (usize::MAX = unvisited).
+        self.comp_buf[..n].fill(usize::MAX);
+
+        for c in 0..n {
+            if !self.grid.cell_exists[c] || self.comp_buf[c] != usize::MAX {
+                continue;
+            }
+            let ci = self.curr_comp_id[c];
+            if ci >= num_comp || !self.can_grow_buf[ci] {
+                continue;
+            }
+
+            // BFS through non-Cut edges, skipping sealed cells
+            let mut region_size = 0usize;
+            let mut region_max_min = 0usize;
+            self.q_buf.clear();
+            self.q_buf.push(c);
+            self.comp_buf[c] = 0;
+            while let Some(cur) = self.q_buf.pop() {
+                region_size += 1;
+                let cur_ci = self.curr_comp_id[cur];
+                if cur_ci < num_comp && cur_ci < self.curr_min_area.len() {
+                    region_max_min = region_max_min.max(self.curr_min_area[cur_ci]);
+                }
+                for eid in self.grid.cell_edges(cur).into_iter().flatten() {
+                    if self.edges[eid] == EdgeState::Cut {
+                        continue;
+                    }
+                    let (c1, c2) = self.grid.edge_cells(eid);
+                    let other = if c1 == cur { c2 } else { c1 };
+                    if !self.grid.cell_exists[other] || self.comp_buf[other] != usize::MAX {
+                        continue;
+                    }
+                    let oci = self.curr_comp_id[other];
+                    if oci >= num_comp || !self.can_grow_buf[oci] {
+                        continue;
+                    }
+                    self.comp_buf[other] = 0;
+                    self.q_buf.push(other);
+                }
+            }
+
+            // Region must be large enough for the most demanding component
+            if region_size < region_max_min {
+                return Err(());
+            }
+
+            // If eff_max_area is small, verify piece count feasibility
+            if self.eff_max_area != usize::MAX && self.eff_max_area > 0 {
+                let min_pieces = (region_size + self.eff_max_area - 1) / self.eff_max_area;
+                let max_pieces = region_size / self.eff_min_area.max(1);
+                if max_pieces < min_pieces {
+                    return Err(());
+                }
+            }
+        }
+
+        // Phase 2: Compass-aware isolation check.
+        // For each compass cell, compute max reach in each specified direction.
+        // Cells outside ALL compass reaches that form a small connected group
+        // (via non-Cut edges, skipping sealed cells) are contradictions.
+        if self.has_compass_clue {
+            self.check_compass_isolation(num_comp)?;
+        }
+
+        Ok(())
+    }
+
+    /// Check if cells outside all compass bounding boxes form groups that
+    /// are too small to be valid pieces. A compass cell with N=v means the
+    /// piece can have at most v cells north of it. Any cell beyond row
+    /// (compass_row - v) is definitely NOT reachable by that compass piece
+    /// (any connected path would require > v north cells).
+    fn check_compass_isolation(&mut self, num_comp: usize) -> Result<(), ()> {
+        let n = self.grid.num_cells();
+
+        // Collect compass reach bounds: for each compass cell, compute
+        // the max row/col it can reach in each specified direction.
+        // A cell at (r, c) is "compass-covered" if it's within the reach
+        // of at least one compass cell's component.
+        let mut compass_covered = vec![false; n];
+
+        for clue in &self.puzzle.cell_clues {
+            let CellClue::Compass { cell, compass } = clue else {
+                continue;
+            };
+            if !self.grid.cell_exists[*cell] {
+                continue;
+            }
+
+            let (cr, cc) = self.grid.cell_pos(*cell);
+            let cri = cr as isize;
+            let cci = cc as isize;
+
+            // Mark cells within compass reach as covered.
+            // Only consider non-sealed cells (sealed cells are already assigned).
+            for c2 in 0..n {
+                if !self.grid.cell_exists[c2] || compass_covered[c2] {
+                    continue;
+                }
+                let ci2 = self.curr_comp_id[c2];
+                if ci2 < num_comp && !self.can_grow_buf[ci2] {
+                    continue; // skip sealed cells
+                }
+
+                let (r2, c2_col) = self.grid.cell_pos(c2);
+                let r2i = r2 as isize;
+                let c2i = c2_col as isize;
+
+                // Check if cell is within compass reach in ALL specified directions
+                let mut within_reach = true;
+                if let Some(v) = compass.n {
+                    if r2i < cri - v as isize {
+                        within_reach = false;
+                    }
+                }
+                if within_reach {
+                    if let Some(v) = compass.s {
+                        if r2i > cri + v as isize {
+                            within_reach = false;
+                        }
+                    }
+                }
+                if within_reach {
+                    if let Some(v) = compass.e {
+                        if c2i > cci + v as isize {
+                            within_reach = false;
+                        }
+                    }
+                }
+                if within_reach {
+                    if let Some(v) = compass.w {
+                        if c2i < cci - v as isize {
+                            within_reach = false;
+                        }
+                    }
+                }
+
+                if within_reach {
+                    compass_covered[c2] = true;
+                }
+            }
+        }
+
+        // Find connected groups of non-covered, non-sealed cells
+        // Reuse comp_buf as visited (already filled from Phase 1, re-fill)
+        self.comp_buf[..n].fill(usize::MAX);
+
+        // Compute max min_area among compass-covered components for threshold
+        let mut max_compass_min = 0usize;
+        for ci in 0..num_comp {
+            if self.can_grow_buf[ci] && self.curr_min_area.len() > ci {
+                max_compass_min = max_compass_min.max(self.curr_min_area[ci]);
+            }
+        }
+        if max_compass_min <= 1 {
+            return Ok(()); // Nothing useful to check
+        }
+
+        for c in 0..n {
+            if !self.grid.cell_exists[c] || compass_covered[c] || self.comp_buf[c] != usize::MAX {
+                continue;
+            }
+            let ci = self.curr_comp_id[c];
+            if ci >= num_comp || !self.can_grow_buf[ci] {
+                continue;
+            }
+
+            // BFS through non-Cut edges, skipping covered and sealed cells
+            let mut group_size = 0usize;
+            self.q_buf.clear();
+            self.q_buf.push(c);
+            self.comp_buf[c] = 0;
+            while let Some(cur) = self.q_buf.pop() {
+                group_size += 1;
+                for eid in self.grid.cell_edges(cur).into_iter().flatten() {
+                    if self.edges[eid] == EdgeState::Cut {
+                        continue;
+                    }
+                    let (c1, c2) = self.grid.edge_cells(eid);
+                    let other = if c1 == cur { c2 } else { c1 };
+                    if !self.grid.cell_exists[other]
+                        || compass_covered[other]
+                        || self.comp_buf[other] != usize::MAX
+                    {
+                        continue;
+                    }
+                    let oci = self.curr_comp_id[other];
+                    if oci >= num_comp || !self.can_grow_buf[oci] {
+                        continue;
+                    }
+                    self.comp_buf[other] = 0;
+                    self.q_buf.push(other);
+                }
+            }
+
+            if group_size < max_compass_min {
+                return Err(());
+            }
+        }
+
+        Ok(())
     }
 
     /// Check if two cells can be connected via Uncut+Unknown edges (BFS).
