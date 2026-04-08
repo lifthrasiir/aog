@@ -51,6 +51,7 @@ impl Solver {
                 self.propagate_delta_gemini_interaction()
             );
             run_prop!("area_bounds", true, self.propagate_area_bounds());
+            run_prop!("rose_parity", true, self.propagate_parity());
             run_prop!("rose_sep", true, self.propagate_rose_separation());
             run_prop!("rose_phase3", true, self.propagate_rose_phase3());
             run_prop!(

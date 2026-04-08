@@ -1,6 +1,49 @@
 use super::Solver;
 use crate::types::*;
 
+// --- Parity Union-Find helpers ---
+// parity[i] = XOR-parity to parent. 0 = same piece, 1 = different piece.
+
+fn uf_find(parent: &[usize], par: &[u8], x: usize) -> (usize, u8) {
+    let mut cur = x;
+    let mut p = 0u8;
+    while parent[cur] != cur {
+        p ^= par[cur];
+        cur = parent[cur];
+    }
+    (cur, p)
+}
+
+/// Union c1 and c2 with parity rel (0=same piece, 1=different piece).
+/// Returns Ok(true) if newly merged, Ok(false) if already consistent, Err if contradiction.
+fn uf_union(
+    parent: &mut Vec<usize>,
+    rank: &mut Vec<u8>,
+    par: &mut Vec<u8>,
+    c1: usize,
+    c2: usize,
+    rel: u8,
+) -> Result<bool, ()> {
+    let (r1, p1) = uf_find(parent, par, c1);
+    let (r2, p2) = uf_find(parent, par, c2);
+    if r1 == r2 {
+        return if (p1 ^ p2) == rel { Ok(false) } else { Err(()) };
+    }
+    // Merge smaller rank into larger
+    if rank[r1] < rank[r2] {
+        parent[r1] = r2;
+        par[r1] = p1 ^ p2 ^ rel;
+    } else if rank[r1] > rank[r2] {
+        parent[r2] = r1;
+        par[r2] = p1 ^ p2 ^ rel;
+    } else {
+        parent[r2] = r1;
+        par[r2] = p1 ^ p2 ^ rel;
+        rank[r1] += 1;
+    }
+    Ok(true)
+}
+
 impl Solver {
     /// BFS from component ci through Uncut+Unknown edges, collect reachable rose types.
     /// If `exclude_rose_mask` is nonzero, cells containing those rose symbols are
@@ -267,6 +310,106 @@ impl Solver {
                     }
                     return Ok(true);
                 }
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Parity propagation using a Union-Find with parity.
+    ///
+    /// Seeds the UF with:
+    ///   - Rose cells of the same type → parity=1 (must be in different pieces)
+    ///   - Uncut edges → parity=0 (cells are in the same piece)
+    ///   - manual_sames → parity=0, manual_diffs → parity=1
+    ///
+    /// Cut edges are NOT used as seeds: a cut edge between two cells does not
+    /// guarantee they are in different pieces (they may be connected via other paths).
+    ///
+    /// Detects contradictions (parity conflict) and forces Cut on unknown edges
+    /// where both endpoints are already determined to be in different pieces.
+    pub(crate) fn propagate_parity(&mut self) -> Result<bool, ()> {
+        if self.rose_bits_all == 0
+            && self.manual_diffs.is_empty()
+            && self.manual_sames.is_empty()
+        {
+            return Ok(false);
+        }
+
+        let n = self.grid.num_cells();
+        let ne = self.grid.num_edges();
+        let two_piece = self.rose_exact_piece_count == Some(2);
+
+        let mut parent: Vec<usize> = (0..n).collect();
+        let mut rank: Vec<u8> = vec![0; n];
+        let mut par: Vec<u8> = vec![0; n];
+
+        // Seed: rose cells of same type → different pieces (parity=1)
+        // Only valid when there are exactly 2 cells per type (bipartite UF
+        // cannot represent "all different" for 3+ cells without false same-piece
+        // implications between the non-primary pairs).
+        if let Some(pl) = &self.pair_layer {
+            for type_cells in pl.rose_by_type() {
+                if type_cells.len() == 2 {
+                    if uf_union(&mut parent, &mut rank, &mut par, type_cells[0], type_cells[1], 1).is_err() {
+                        return Err(());
+                    }
+                }
+            }
+        }
+
+        // manual_sames → parity=0: always valid (asserting same piece definitively)
+        for &(c1, c2) in &self.manual_sames {
+            if uf_union(&mut parent, &mut rank, &mut par, c1, c2, 0).is_err() {
+                return Err(());
+            }
+        }
+        // manual_diffs → parity=1: only safe for 2-piece puzzles (same bipartite limitation)
+        if two_piece {
+            for &(c1, c2) in &self.manual_diffs {
+                if uf_union(&mut parent, &mut rank, &mut par, c1, c2, 1).is_err() {
+                    return Err(());
+                }
+            }
+        }
+
+        // Seed: Uncut edges → parity=0 (always valid for any number of pieces)
+        // Seed: Cut edges → parity=1 (only valid for 2-piece puzzles; in 3+ piece puzzles
+        // A-B cut + B-C cut incorrectly implies A-C same via XOR transitivity)
+        for e in 0..ne {
+            let rel = match self.edges[e] {
+                EdgeState::Uncut => 0u8,
+                EdgeState::Cut => {
+                    if two_piece { 1u8 } else { continue }
+                }
+                EdgeState::Unknown => continue,
+            };
+            let (c1, c2) = self.grid.edge_cells(e);
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                continue;
+            }
+            if uf_union(&mut parent, &mut rank, &mut par, c1, c2, rel).is_err() {
+                return Err(());
+            }
+        }
+
+        // Force: unknown edges where both endpoints have parity=1 → Cut
+        for e in 0..ne {
+            if self.edges[e] != EdgeState::Unknown {
+                continue;
+            }
+            let (c1, c2) = self.grid.edge_cells(e);
+            if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                continue;
+            }
+            let (r1, p1) = uf_find(&parent, &par, c1);
+            let (r2, p2) = uf_find(&parent, &par, c2);
+            if r1 == r2 && (p1 ^ p2) == 1 {
+                // Must be in different pieces → this edge must be Cut
+                if !self.set_edge(e, EdgeState::Cut) {
+                    return Err(());
+                }
+                return Ok(true);
             }
         }
 
