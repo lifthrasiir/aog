@@ -955,6 +955,29 @@ impl Solver {
                         continue;
                     }
 
+                    // Direction-reachability contradiction check.
+                    // If total reachable cells in an unsatisfied direction < target → contradiction.
+                    // This catches cases where a compass direction is blocked: e.g. "W2 but
+                    // left and below are all Cut" → no way to ever get 2 west cells.
+                    for &(dir_idx, v, cri, cci) in &unsatisfied {
+                        let reachable_dir = local_cells
+                            .iter()
+                            .filter(|&&c| {
+                                let (pr, pc) = self.grid.cell_pos(c);
+                                match dir_idx {
+                                    0 => (pr as isize) < cri,
+                                    1 => (pr as isize) > cri,
+                                    2 => (pc as isize) > cci,
+                                    3 => (pc as isize) < cci,
+                                    _ => false,
+                                }
+                            })
+                            .count();
+                        if reachable_dir < v {
+                            return Err(());
+                        }
+                    }
+
                     // Build undirected adjacency list for the reachable subgraph
                     let mut adj: Vec<Vec<(usize, EdgeId)>> = vec![Vec::new(); n_local];
                     for (li, &c) in local_cells.iter().enumerate() {
@@ -1091,6 +1114,135 @@ impl Solver {
 
                         if force_uncut {
                             compass_forced_uncuts.push(bridge_eid);
+                        }
+                    }
+
+                    // Single-gateway-edge forcing.
+                    // Skip if there are pending compass_forced_cuts: those cuts have not
+                    // yet been applied to self.edges, so the reachable subgraph is stale
+                    // and the backward BFS may traverse soon-to-be-Cut edges, leading to
+                    // spurious forced Uncuts.
+                    if !compass_forced_cuts.is_empty() {
+                        continue;
+                    }
+
+                    // Build a fresh CI membership set using current Uncut edges.
+                    // curr_comp_id may be stale (cells joined via Uncut edges set in this
+                    // propagation round but before build_components was re-run).
+                    // BFS from original CI cells (curr_comp_id == ci) via Uncut edges
+                    // within local_cells to identify all currently-CI cells.
+                    let mut is_fresh_ci = vec![false; n_local];
+                    {
+                        let mut fc_bfs: VecDeque<usize> = VecDeque::new();
+                        for li in 0..n_local {
+                            if self.curr_comp_id[local_cells[li]] == ci {
+                                is_fresh_ci[li] = true;
+                                fc_bfs.push_back(li);
+                            }
+                        }
+                        while let Some(u) = fc_bfs.pop_front() {
+                            for &(vj, eid) in &adj[u] {
+                                if is_fresh_ci[vj] {
+                                    continue;
+                                }
+                                if self.edges[eid] == EdgeState::Uncut {
+                                    is_fresh_ci[vj] = true;
+                                    fc_bfs.push_back(vj);
+                                }
+                            }
+                        }
+                    }
+
+                    // For each unsatisfied direction, do a backward BFS from dir-direction
+                    // cells (not in CI) through the local subgraph (excluding CI cells).
+                    // Any Unknown edge from CI to a cell reachable in this backward BFS is
+                    // a "gateway edge" to that direction.  If exactly 1 such edge exists,
+                    // it must be opened → forced Uncut.
+                    for &(dir_idx, _v, cri, cci) in &unsatisfied {
+                        // Backward BFS from non-CI dir-direction cells
+                        let mut visited_local = vec![false; n_local];
+                        let mut bfs: VecDeque<usize> = VecDeque::new();
+
+                        for li in 0..n_local {
+                            if is_fresh_ci[li] {
+                                continue; // skip CI cells
+                            }
+                            let c = local_cells[li];
+                            // Only consider unassigned cells as direction targets.
+                            // Cells in other components may be unable to join CI due
+                            // to their own constraints — including them would risk
+                            // false "only 1 gateway" conclusions.
+                            if self.curr_comp_id[c] != usize::MAX {
+                                continue;
+                            }
+                            let (pr, pc) = self.grid.cell_pos(c);
+                            let in_dir = match dir_idx {
+                                0 => (pr as isize) < cri,
+                                1 => (pr as isize) > cri,
+                                2 => (pc as isize) > cci,
+                                3 => (pc as isize) < cci,
+                                _ => false,
+                            };
+                            if in_dir {
+                                visited_local[li] = true;
+                                bfs.push_back(li);
+                            }
+                        }
+
+                        if bfs.is_empty() {
+                            // No unassigned dir cells reachable; skip
+                            continue;
+                        }
+
+                        // BFS outward through non-CI cells in the local subgraph.
+                        // Also restrict to unassigned cells to avoid false gateways
+                        // via cells that belong to other (possibly incompatible) components.
+                        while let Some(u) = bfs.pop_front() {
+                            for &(vj, _eid) in &adj[u] {
+                                if visited_local[vj] {
+                                    continue;
+                                }
+                                if is_fresh_ci[vj] {
+                                    continue; // don't enter CI cells
+                                }
+                                if self.curr_comp_id[local_cells[vj]] != usize::MAX {
+                                    continue; // skip other-component cells
+                                }
+                                visited_local[vj] = true;
+                                bfs.push_back(vj);
+                            }
+                        }
+
+                        // Collect Unknown edges from CI cells to visited non-CI cells
+                        let mut gateway_edges: Vec<EdgeId> = Vec::new();
+                        for li in 0..n_local {
+                            if !is_fresh_ci[li] {
+                                continue;
+                            }
+                            for &(vj, eid) in &adj[li] {
+                                if !visited_local[vj] {
+                                    continue;
+                                }
+                                if self.edges[eid] != EdgeState::Unknown {
+                                    continue;
+                                }
+                                // Each edge has unique endpoints, so no duplicates possible
+                                gateway_edges.push(eid);
+                            }
+                        }
+
+                        if gateway_edges.is_empty() {
+                            // No Unknown gateway from CI to dir cells found.
+                            // Do NOT return Err() here: pending compass_forced_cuts
+                            // (not yet applied to self.edges) may already block the
+                            // paths the backward BFS traversed, so the apparent lack
+                            // of a gateway could be spurious. Leave contradiction
+                            // detection to reachability check and bridge analysis.
+                            continue;
+                        }
+
+                        if gateway_edges.len() == 1 {
+                            compass_forced_uncuts.push(gateway_edges[0]);
                         }
                     }
                 }
@@ -1488,11 +1640,11 @@ impl Solver {
     pub(crate) fn propagate_area_bounds(&mut self) -> Result<bool, ()> {
         let num_comp = self.build_components()?;
 
-        // Pre-cut edge straddle check: if both cells of a pre-cut edge
-        // are in the same component (connected via an alternative path
-        // around the Cut edge), that piece would contain a pre-cut edge → invalid.
+        // Cut edge straddle check: if both cells of any Cut edge are in
+        // the same component (connected via Uncut edges around the Cut),
+        // that Cut is inside a piece → invalid.
         for e in 0..self.grid.num_edges() {
-            if !self.is_pre_cut[e] {
+            if self.edges[e] != EdgeState::Cut {
                 continue;
             }
             let (c1, c2) = self.grid.edge_cells(e);
