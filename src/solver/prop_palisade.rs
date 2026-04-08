@@ -46,7 +46,7 @@ impl Solver {
                 continue;
             }
 
-            let edges: [Option<EdgeId>; 4] = self.grid.cell_edges(*cell);
+            let edges = self.grid.cell_edges(*cell).into_array();
             let states: [EdgeState; 4] =
                 edges.map(|e| e.map(|eid| self.edges[eid]).unwrap_or(EdgeState::Cut));
 

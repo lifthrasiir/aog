@@ -61,11 +61,11 @@ impl PalisadeKind {
     }
 
     /// Returns (expected_cut_count, edge_mask) for a given rotation.
-    /// The mask bits correspond to the cell_edges ordering: top(0), bottom(1), left(2), right(3).
-    /// Rotations go clockwise: top → right → bottom → left, so the cycle in bit positions is
-    /// [0, 3, 1, 2] (top=bit0, right=bit3, bottom=bit1, left=bit2).
+    /// Mask bits follow `News::into_array` order: north=0, south=1, west=2, east=3.
+    /// Rotations go clockwise: north → east → south → west, so the cycle in bit positions is
+    /// [0, 3, 1, 2] (north=bit0, east=bit3, south=bit1, west=bit2).
     pub fn pattern_at_rotation(self, rot: usize) -> (usize, u8) {
-        // Clockwise cycle in cell_edges bit positions: top=0, right=3, bottom=1, left=2
+        // Clockwise cycle in News::into_array bit positions: north=0, east=3, south=1, west=2
         const CYCLE: [u8; 4] = [0, 3, 1, 2];
         let bit = |i: usize| -> u8 { 1 << CYCLE[i % 4] };
         match self {
