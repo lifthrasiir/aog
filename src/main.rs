@@ -5,6 +5,7 @@ mod parser;
 mod polyomino;
 mod solver;
 mod types;
+mod uf;
 
 use std::fs::File;
 use std::io::BufReader;

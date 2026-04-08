@@ -1,48 +1,6 @@
 use super::Solver;
 use crate::types::*;
-
-// --- Parity Union-Find helpers ---
-// parity[i] = XOR-parity to parent. 0 = same piece, 1 = different piece.
-
-fn uf_find(parent: &[usize], par: &[u8], x: usize) -> (usize, u8) {
-    let mut cur = x;
-    let mut p = 0u8;
-    while parent[cur] != cur {
-        p ^= par[cur];
-        cur = parent[cur];
-    }
-    (cur, p)
-}
-
-/// Union c1 and c2 with parity rel (0=same piece, 1=different piece).
-/// Returns Ok(true) if newly merged, Ok(false) if already consistent, Err if contradiction.
-fn uf_union(
-    parent: &mut Vec<usize>,
-    rank: &mut Vec<u8>,
-    par: &mut Vec<u8>,
-    c1: usize,
-    c2: usize,
-    rel: u8,
-) -> Result<bool, ()> {
-    let (r1, p1) = uf_find(parent, par, c1);
-    let (r2, p2) = uf_find(parent, par, c2);
-    if r1 == r2 {
-        return if (p1 ^ p2) == rel { Ok(false) } else { Err(()) };
-    }
-    // Merge smaller rank into larger
-    if rank[r1] < rank[r2] {
-        parent[r1] = r2;
-        par[r1] = p1 ^ p2 ^ rel;
-    } else if rank[r1] > rank[r2] {
-        parent[r2] = r1;
-        par[r2] = p1 ^ p2 ^ rel;
-    } else {
-        parent[r2] = r1;
-        par[r2] = p1 ^ p2 ^ rel;
-        rank[r1] += 1;
-    }
-    Ok(true)
-}
+use crate::uf::{uf_find, uf_union};
 
 impl Solver {
     /// BFS from component ci through Uncut+Unknown edges, collect reachable rose types.

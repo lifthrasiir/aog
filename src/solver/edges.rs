@@ -193,6 +193,31 @@ impl Solver {
                 }
             }
 
+            // Slitherlink cut-path endpoint bonus: for loopy+watchtower puzzles,
+            // edges at cut-path endpoints (vertices with exactly 1 cut edge) are
+            // the most constrained — they must extend the path. Resolving these
+            // early prevents deep wrong branches in Slitherlink-like puzzles.
+            if self.puzzle.rules.loopy && !self.watchtower_vertices.is_empty() {
+                let (is_h, r, c) = self.grid.decode_edge(e);
+                let (v1i, v1j) = (r, c);
+                let (v2i, v2j) = if is_h {
+                    (r + 1, c)
+                } else {
+                    (r, c + 1)
+                };
+                for &(vi, vj) in &[(v1i, v1j), (v2i, v2j)] {
+                    let cut_deg: usize = self.grid.vertex_edges(vi, vj)
+                        .into_iter()
+                        .flatten()
+                        .filter(|eid| self.edges[*eid] == EdgeState::Cut)
+                        .count();
+                    if cut_deg == 1 {
+                        score += 45; // path endpoint: high priority
+                        break;
+                    }
+                }
+            }
+
             // Rose cell proximity bonus: prefer edges near rose cells.
             // The boundary between pieces must separate rose cells of the same type,
             // so edges near them are more likely to be on the boundary.

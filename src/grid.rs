@@ -179,7 +179,6 @@ impl Grid {
     ///
     /// - `h_edge(r, c)` → `(vertex(r+1, c), vertex(r+1, c+1))`   left < right
     /// - `v_edge(r, c)` → `(vertex(r, c+1), vertex(r+1, c+1))`   top  < bottom
-    #[cfg_attr(not(test), expect(unused))]
     pub fn edge_vertices(&self, e: EdgeId) -> (VertexId, VertexId) {
         let (is_h, r, c) = self.decode_edge(e);
         if is_h {
