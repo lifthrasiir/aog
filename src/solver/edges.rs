@@ -193,6 +193,26 @@ impl Solver {
                 }
             }
 
+            // Rose cell proximity bonus: prefer edges near rose cells.
+            // The boundary between pieces must separate rose cells of the same type,
+            // so edges near them are more likely to be on the boundary.
+            if self.rose_bits_all != 0 && (self.cell_rose_sym[c1] != u8::MAX || self.cell_rose_sym[c2] != u8::MAX) {
+                score += 80;
+            }
+            // Also bonus edges whose cells are in different rose-containing components
+            if self.rose_bits_all != 0 && !self.curr_comp_id.is_empty() {
+                let ci1_sym = self.cell_rose_sym[c1] != u8::MAX;
+                let ci2_sym = self.cell_rose_sym[c2] != u8::MAX;
+                // Edge between a rose cell and a non-rose cell is a strong boundary candidate
+                if ci1_sym ^ ci2_sym {
+                    score += 40;
+                }
+                // Edge between two cells with same-type rose symbols → must be DIFF (Cut)
+                if ci1_sym && ci2_sym && self.cell_rose_sym[c1] == self.cell_rose_sym[c2] {
+                    score += 200; // very high: this edge MUST be Cut
+                }
+            }
+
             // Compass-aware edge selection bonuses
             if self.has_compass_clue {
                 // Bonus: edge adjacent to a compass cell
@@ -396,8 +416,28 @@ impl Solver {
             if !self.set_edge(e, val) {
                 continue;
             }
-            if self.propagate().is_ok() {
-                self.backtrack_edges();
+            match self.propagate() {
+                Ok(_) => {
+                    self.backtrack_edges();
+                }
+                Err(_) => {
+                    let (c1, c2) = self.grid.edge_cells(e);
+                    // If we're on the solution path, this branch failure is wrong
+                    if !self.in_probing && !self.debug_known_solution.is_empty() {
+                        let sol = if e < self.debug_known_solution.len() {
+                            self.debug_known_solution[e]
+                        } else {
+                            EdgeState::Unknown
+                        };
+                        if sol == val {
+                            eprintln!(
+                                "SOLUTION_KILL: branch edge={} cells={:?}->{:?} val={:?} depth={} unk={} prop={}",
+                                e, self.grid.cell_pos(c1), self.grid.cell_pos(c2), val,
+                                self.search_depth, self.curr_unknown, self.debug_current_prop
+                            );
+                        }
+                    }
+                }
             }
             self.restore(snap);
         }

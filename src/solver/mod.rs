@@ -97,6 +97,9 @@ pub struct Solver {
     pub(crate) has_compass_clue: bool,
     // Cell-pair constraint layer (None if no rose symbols)
     pub(crate) pair_layer: Option<pair::CellPairLayer>,
+    // Exact piece count deduced from rose window: if all rose types have the same
+    // count N, then exactly N pieces are needed (each piece gets one of each type).
+    pub(crate) rose_exact_piece_count: Option<usize>,
     // Reusable BFS buffer for path-finding (pair branching)
     pub(crate) bfs_prev: Vec<Option<(CellId, EdgeId)>>,
     // Manual DIFF constraints from branching (c1, c2)
@@ -169,6 +172,33 @@ impl Solver {
 
         let rose_visited = vec![false; nc];
 
+        // Deduce exact piece count from rose window:
+        // If all rose types have the same count N, exactly N pieces are needed.
+        // If counts differ, no solution exists (some type would be left out).
+        let rose_exact_piece_count = if rose_bits_all != 0 {
+            let mut type_counts: Vec<usize> = Vec::new();
+            for cl in &puzzle.cell_clues {
+                if let CellClue::Rose { symbol, .. } = cl {
+                    let idx = *symbol as usize;
+                    while type_counts.len() <= idx {
+                        type_counts.push(0);
+                    }
+                    type_counts[idx] += 1;
+                }
+            }
+            let nonzero: Vec<usize> = type_counts.iter().copied().filter(|&c| c > 0).collect();
+            if nonzero.is_empty() {
+                None
+            } else if nonzero.iter().all(|&c| c == nonzero[0]) {
+                Some(nonzero[0])
+            } else {
+                // Differing counts → no solution (checked in solve())
+                None
+            }
+        } else {
+            None
+        };
+
         let has_palisade_clue = puzzle
             .cell_clues
             .iter()
@@ -226,6 +256,7 @@ impl Solver {
             has_palisade_clue,
             has_compass_clue,
             pair_layer: None,
+            rose_exact_piece_count,
             bfs_prev: Vec::new(),
             manual_diffs: Vec::new(),
             manual_diff_set: HashSet::new(),
@@ -291,6 +322,11 @@ impl Solver {
             .filter(|&&e| e == EdgeState::Unknown)
             .count();
 
+        // Rose exact piece count: if type counts differ, no solution.
+        if self.rose_bits_all != 0 && self.rose_exact_piece_count.is_none() {
+            return 0;
+        }
+
         // Set pre-cut edges for missing cells
         for e in 0..self.grid.num_edges() {
             let (c1, c2) = self.grid.edge_cells(e);
@@ -313,6 +349,59 @@ impl Solver {
         }
         self.propagate_palisade();
 
+        // Watchtower !(value=1) replacement on 4-cell vertices:
+        // Every cell must belong to a piece, so value=1 always means 0 cut edges.
+        // Force all 4 surrounding edges to Uncut and remove the clue.
+        // (For border vertices with fewer cells, keep the clue for proper propagation.)
+        {
+            let cell_pair_indices: [(usize, usize); 4] = [(0, 1), (0, 2), (1, 3), (2, 3)];
+            let mut remove_indices = Vec::new();
+            let mut edges_to_uncut: Vec<EdgeId> = Vec::new();
+            for (idx, clue) in self.puzzle.vertex_clues.iter().enumerate() {
+                if clue.value != 1 {
+                    continue;
+                }
+                let (vi, vj) = self.grid.vertex_pos(clue.vertex);
+                let cell_opts = self.grid.vertex_cells(vi, vj);
+                let n = cell_opts
+                    .iter()
+                    .copied()
+                    .flatten()
+                    .filter(|&cid| self.grid.cell_exists[cid])
+                    .count();
+                if n == 4 {
+                    for &(a_idx, b_idx) in &cell_pair_indices {
+                        if let (Some(a), Some(b)) = (cell_opts[a_idx], cell_opts[b_idx]) {
+                            if self.grid.cell_exists[a] && self.grid.cell_exists[b] {
+                                if let Some(eid) = self.grid.edge_between(a, b) {
+                                    edges_to_uncut.push(eid);
+                                }
+                            }
+                        }
+                    }
+                    remove_indices.push(idx);
+                }
+            }
+            for eid in edges_to_uncut {
+                if self.edges[eid] == EdgeState::Unknown {
+                    let _ = self.set_edge(eid, EdgeState::Uncut);
+                }
+            }
+            // Remove replaced clues (in reverse order to preserve indices)
+            for &idx in remove_indices.iter().rev() {
+                self.puzzle.vertex_clues.remove(idx);
+            }
+            if !remove_indices.is_empty() {
+                // Rebuild watchtower_vertices set
+                self.watchtower_vertices = self
+                    .puzzle
+                    .vertex_clues
+                    .iter()
+                    .map(|cl| cl.vertex)
+                    .collect();
+            }
+        }
+
         // Initialize pair layer for rose puzzles
         if self.rose_bits_all != 0 {
             self.pair_layer = Some(pair::CellPairLayer::new(
@@ -324,6 +413,18 @@ impl Solver {
 
         if self.propagate().is_err() {
             return 0;
+        }
+
+        // Vertex-level watchtower config probing: for watchtower vertices,
+        // enumerate valid Cut/Uncut configurations. If only one survives, force it.
+        // Iterates until no more progress.
+        if !self.puzzle.vertex_clues.is_empty() {
+            let n_forced = self.probe_watchtower_vertex_configs();
+            if n_forced > 0 {
+                if self.propagate().is_err() {
+                    return 0;
+                }
+            }
         }
 
         // Pre-search compass incompatibility: detect incompatible compass pairs

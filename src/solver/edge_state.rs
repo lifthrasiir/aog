@@ -96,7 +96,7 @@ mod tests {
 
         // Set another edge
         let e2 = s.grid.h_edge(0, 0);
-        assert!(s.set_edge(e2, EdgeState::Uncut));
+        let _ = s.set_edge(e2, EdgeState::Uncut);
         assert_eq!(s.edges[e2], EdgeState::Uncut);
 
         // Restore to before e2

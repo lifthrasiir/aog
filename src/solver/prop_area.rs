@@ -315,6 +315,34 @@ impl Solver {
                 }
             }
         }
+
+        // === Rose exact piece count cap ===
+        // If we know there are exactly K pieces, and K components are already sealed,
+        // all remaining inter-component edges must be Cut (no more pieces allowed).
+        if let Some(k) = self.rose_exact_piece_count {
+            let sealed_count = (0..num_comp).filter(|&ci| !self.can_grow_buf[ci]).count();
+            if sealed_count > k {
+                return Err(());
+            }
+            if sealed_count == k {
+                for e in 0..self.grid.num_edges() {
+                    if self.edges[e] != EdgeState::Unknown {
+                        continue;
+                    }
+                    let (c1, c2) = self.grid.edge_cells(e);
+                    if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                        continue;
+                    }
+                    let ci1 = self.curr_comp_id[c1];
+                    let ci2 = self.curr_comp_id[c2];
+                    if ci1 != ci2 {
+                        if !self.set_edge(e, EdgeState::Cut) {
+                            return Err(());
+                        }
+                    }
+                }
+            }
+        }
         Ok(num_comp)
     }
 
@@ -1577,10 +1605,7 @@ impl Solver {
                 // the target can never be reached → contradiction.
                 // Only check when nearly sealed (few growth options) to
                 // limit overhead. Skip during probing.
-                if !self.in_probing
-                    && self.can_grow_buf[ci]
-                    && self.curr_comp_sz[ci] < t
-                {
+                if !self.in_probing && self.can_grow_buf[ci] && self.curr_comp_sz[ci] < t {
                     let unk_growth = self.growth_edges[ci]
                         .iter()
                         .filter(|&&e| self.edges[e] == EdgeState::Unknown)
