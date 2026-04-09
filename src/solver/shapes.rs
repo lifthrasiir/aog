@@ -58,9 +58,10 @@ impl Solver {
         // Any piece larger than this cannot exist without crossing a pre-cut edge.
         let max_comp = self.max_non_precut_component_size();
         if self.eff_max_area > max_comp {
-            eprintln!(
-                "eff_max_area capped: {} -> {} (max non-pre-cut component)",
-                self.eff_max_area, max_comp
+            tracing::info!(
+                from = self.eff_max_area,
+                to = max_comp,
+                "eff_max_area capped (max non-pre-cut component)"
             );
             self.eff_max_area = max_comp;
         }
@@ -123,11 +124,11 @@ impl Solver {
                 }
             }
         }
-        eprintln!(
-            "boxy shape bank: {} shapes (sizes {}-{})",
-            self.puzzle.rules.shape_bank.len(),
-            self.eff_min_area,
-            max_size
+        tracing::info!(
+            shapes = self.puzzle.rules.shape_bank.len(),
+            min_area = self.eff_min_area,
+            max_area = max_size,
+            "boxy shape bank populated"
         );
     }
 
@@ -150,11 +151,11 @@ impl Solver {
                 }
             }
         }
-        eprintln!(
-            "non-boxy shape bank: {} shapes (sizes {}-{})",
-            self.puzzle.rules.shape_bank.len(),
-            self.eff_min_area,
-            max_size
+        tracing::info!(
+            shapes = self.puzzle.rules.shape_bank.len(),
+            min_area = self.eff_min_area,
+            max_area = max_size,
+            "non-boxy shape bank populated"
         );
     }
 

@@ -73,6 +73,13 @@ impl Solver {
             }
             if unk_count == 1 {
                 let e = unk_edge.unwrap();
+                tracing::debug!(
+                    comp = ci,
+                    edge = e,
+                    sz = self.curr_comp_sz[ci],
+                    min_area = self.prop.curr_min_area[ci],
+                    "dual_conn Check1: single growth edge, forcing Uncut"
+                );
                 if !self.set_edge(e, EdgeState::Uncut) {
                     return Err(());
                 }
@@ -108,7 +115,17 @@ impl Solver {
             num_cc += 1;
         }
 
+        tracing::debug!(
+            num_cc,
+            num_pieces,
+            num_comp,
+            depth = self.search_depth,
+            unk = self.curr_unknown,
+            "dual_conn: cc check"
+        );
+
         if num_cc > num_pieces {
+            tracing::debug!(num_cc, num_pieces, "dual_conn: too many CCs, contradiction");
             return Err(());
         }
 
@@ -119,6 +136,12 @@ impl Solver {
                 .flat_map(|ci| self.prop.growth_edges[ci].iter().copied())
                 .filter(|&e| self.edges[e] == EdgeState::Unknown)
                 .collect();
+            tracing::debug!(
+                num_cc,
+                num_pieces,
+                forcing = to_force.len(),
+                "dual_conn Check2: exact match, forcing all unknown growth edges Uncut"
+            );
             for e in to_force {
                 if !self.set_edge(e, EdgeState::Uncut) {
                     return Err(());
@@ -175,6 +198,12 @@ impl Solver {
 
             // Smaller side must accommodate at least one piece
             if small < self.eff_min_area {
+                tracing::debug!(
+                    edge = e,
+                    small,
+                    eff_min_area = self.eff_min_area,
+                    "dual_conn Check3: bridge small side too small, forcing Uncut"
+                );
                 if !self.set_edge(e, EdgeState::Uncut) {
                     return Err(());
                 }
@@ -183,8 +212,14 @@ impl Solver {
             }
 
             // If cutting this bridge brings cc count to exactly num_pieces,
-            // both sides must each form exactly 1 piece → check max area.
+            // both sides must each form exactly 1 piece -- check max area.
             if num_cc + 1 == num_pieces && large > self.eff_max_area {
+                tracing::debug!(
+                    edge = e,
+                    large,
+                    eff_max_area = self.eff_max_area,
+                    "dual_conn Check3: bridge large side too big, forcing Uncut"
+                );
                 if !self.set_edge(e, EdgeState::Uncut) {
                     return Err(());
                 }

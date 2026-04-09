@@ -37,6 +37,43 @@ Given a grid shape and a set of clues, build a program that finds the solution. 
 
 ## Commands
 
-`cargo run` (generally used in its optimized form, `cargo run -r`) is a main entry point. You are strongly expected to give a reasonable timeout to this command, as it can run indefinitely if the puzzle is too difficult or has some bugs. Use the `timeout` command instead of the timeout argument in the tool. (Keep in mind that `cargo run` builds the executable before running it, so it may take some more time.) Any puzzle requiring more than 60 seconds to solve is considered "stalled" and should be debugged unless noted. `cargo test` contains a suite of puzzles that are expected to be solved quickly, so it must be your first command to verify everything is working. `--solution-kill` option can be used to debug where the solution is deviating from the expected one; it records any occurrence of such deviation in lines starting with `SOLUTION_KILL`.
+`cargo run` (generally used in its optimized form, `cargo run -r`) is a main entry point. You are strongly expected to give a reasonable timeout to this command, as it can run indefinitely if the puzzle is too difficult or has some bugs. Use the `timeout` command instead of the timeout argument in the tool. (Keep in mind that `cargo run` builds the executable before running it, so it may take some more time.) Any puzzle requiring more than 60 seconds to solve is considered "stalled" and should be debugged unless noted. `cargo test` contains a suite of puzzles that are expected to be solved quickly, so it must be your first command to verify everything is working. `cargo run [-r] -- --solution-kill` can be used to debug where the solution is deviating from the expected one; it records any occurrence of such deviation in lines with `SOLUTION_KILL`.
 
 You are given `cargo run -- --parse <puzzle file>` to retrieve the puzzle file in JSON. The JSON object has four or five keys, `rules` (matches global rules section in the file), `cells` (maps a cell coordinate like "a1" to a clue string), `edges` (maps an edge coordinate like "a1-a2" or "a1|b1" to a clue string, "-" or "|" if pre-cut, omitted if no clue is present), `vertices` (maps a vertex coordinate like "a1+b2" to a clue string, omitted if no clue is present) and optionally `solution` (maps a cell coordinate to a shape number, which is unique to each piece). Any non-standard shape is described in multi-line formats like "###\n#.#\n###". When you work with the parsed puzzle, you may refer edges and vertices as shortened notations "a1-", "-a2", "a1|", "|b1", "a1+", "+b2" as needed. DO NOT TRY TO PARSE THE PUZZLE YOURSELF.
+
+## Logging Infrastructure
+
+The solver uses the `tracing` crate for structured logging, initialized in `main.rs` via `tracing_subscriber`. Log output goes to stderr. The default level is `warn` (i.e., no output unless `RUST_LOG` is set).
+
+**Activating logs:**
+```sh
+RUST_LOG=info cargo run -r -- puzzle.txt          # strategy decisions
+RUST_LOG=debug cargo run -r -- puzzle.txt          # propagation detail
+RUST_LOG=trace cargo run -r -- puzzle.txt          # every set_edge call
+RUST_LOG=aog_solver::solver::propagation::dual=debug cargo run -r -- puzzle.txt
+```
+
+**Span structure** (automatically nested by the recursive call stack):
+```
+search{depth=N, unk=M}           -- one per backtrack node (edges.rs)
+  propagate{depth=N, probe=B}    -- one per propagate() call (propagation/mod.rs)
+    probe{edge=E, val=V, ...}    -- one per probe attempt (propagation/mod.rs)
+      propagate{...}             -- recursive propagation inside probe
+```
+
+**Log level assignment — follow these rules when adding new log calls:**
+
+| Level | When to use |
+|-------|-------------|
+| `error!` | Not currently used (contradictions are returned as `Err(())`, not logged). |
+| `warn!`  | Debugging anomalies visible without `RUST_LOG`: `SOLUTION_KILL` (solution path killed by wrong deduction) and `FALSE_ERR` (propagator returned error while on solution path). These always print when using `--solution-kill`. |
+| `info!`  | One-time strategic decisions made at solver startup or search entry: shape bank population, effective area bounds, match solver path chosen, grouped area placements, initial propagation state summary. Roughly one line per high-level strategy choice. |
+| `debug!` | Per-propagation-round decisions that are too verbose for `info!` but crucial for diagnosing stalls: `build_components` result (num_comp), `dual_conn` cc-vs-pieces comparison, forced edges from `dual_conn` / `compass_placement`, bridge analysis outcomes. |
+| `trace!` | Every `set_edge` call (edge index, state, propagator name, depth, remaining unknowns). Also per-probe outcome lines. Only enable when debugging a specific cascade. |
+
+**Rules for log messages:**
+- All message strings and field names must be **ASCII only** (no `->`, `=>`, Unicode arrows, or box-drawing characters).
+- Use structured fields (`field = value`) rather than embedding values in the message string. Example: `tracing::debug!(edge = e, state = ?s, "set_edge")` not `tracing::debug!("set_edge e={e} s={s:?}")`.
+- Use `?` (Debug format) for `EdgeState` and position tuples; use bare values for integers.
+- Do not log inside tight inner loops (e.g., per-cell BFS iterations). Log at the entry/exit of a propagator or at the point a forced edge is decided.
+- Do not add `info!` inside the propagation loop (`propagate()`) or inside probing — those paths run millions of times. `debug!` and `trace!` are acceptable there because they are zero-cost when the level is disabled.

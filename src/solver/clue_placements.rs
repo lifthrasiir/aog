@@ -369,10 +369,10 @@ impl Solver {
                     let mut results =
                         self.generate_compass_polyominoes(start_cell, compass, &clue_at);
                     if results.len() > Self::MAX_COMPASS_PLACEMENTS {
-                        eprintln!(
-                            "compass clue at ({:?}): {} placements (too many, skipping clue)",
-                            self.grid.cell_pos(start_cell),
-                            results.len()
+                        tracing::info!(
+                            cell = ?self.grid.cell_pos(start_cell),
+                            placements = results.len(),
+                            "compass clue: too many placements, skipping"
                         );
                         results.clear();
                     }
@@ -429,7 +429,7 @@ impl Solver {
                 .copied()
                 .collect();
             let placements = self.generate_grouped_placements(anchors, area, &forbidden);
-            eprintln!("area {}: {} placements", area, placements.len());
+            tracing::info!(area, placements = placements.len(), "grouped area placements");
             group_placements.push(placements);
         }
 

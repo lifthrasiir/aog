@@ -12,6 +12,16 @@ use std::io::BufReader;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .without_time()
+        .with_target(true)
+        .init();
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 3 {
         eprintln!("Usage: aog [--parse | --solution-kill] [filename]");
@@ -85,9 +95,9 @@ fn main() -> ExitCode {
     };
 
     if !debug_known.is_empty() {
-        eprintln!(
-            "Solution kill tracing enabled ({} edges from comment)",
-            debug_known.len()
+        tracing::info!(
+            edges = debug_known.len(),
+            "solution kill tracing enabled"
         );
     }
 

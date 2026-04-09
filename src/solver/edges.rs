@@ -401,6 +401,12 @@ impl Solver {
         self.node_count += 1;
         self.report_progress();
         self.search_depth += 1;
+        let _search_span = tracing::debug_span!(
+            "search",
+            depth = self.search_depth,
+            unk = self.curr_unknown
+        )
+        .entered();
 
         if self.curr_unknown == 0 {
             let pieces = self.compute_pieces();
@@ -481,10 +487,15 @@ impl Solver {
                             EdgeState::Unknown
                         };
                         if sol == val {
-                            eprintln!(
-                                "SOLUTION_KILL: branch edge={} cells={:?}->{:?} val={:?} depth={} unk={} prop={}",
-                                e, self.grid.cell_pos(c1), self.grid.cell_pos(c2), val,
-                                self.search_depth, self.curr_unknown, self.debug_current_prop
+                            tracing::warn!(
+                                edge = e,
+                                cell_from = ?self.grid.cell_pos(c1),
+                                cell_to = ?self.grid.cell_pos(c2),
+                                val = ?val,
+                                depth = self.search_depth,
+                                unk = self.curr_unknown,
+                                prop = self.debug_current_prop,
+                                "SOLUTION_KILL branch"
                             );
                         }
                     }

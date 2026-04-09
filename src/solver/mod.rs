@@ -260,10 +260,10 @@ impl Solver {
             }
             self.prop.same_area_groups = distinct_sum == self.total_cells;
             if self.prop.same_area_groups {
-                eprintln!(
-                    "same-area-groups optimization: {} distinct areas sum to {} = total cells",
-                    seen.len(),
-                    distinct_sum
+                tracing::info!(
+                    distinct_areas = seen.len(),
+                    total_cells = distinct_sum,
+                    "same-area-groups optimization active"
                 );
             }
         }
@@ -334,7 +334,7 @@ impl Solver {
         if self.has_compass_clue {
             let n_incompat = self.init_compass_incompatibility();
             if n_incompat > 0 {
-                eprintln!("compass incompatibility: {} pairs forced DIFF", n_incompat);
+                tracing::info!(pairs = n_incompat, "compass incompatibility: pairs forced DIFF");
                 if self.propagate().is_err() {
                     return 0;
                 }
@@ -427,20 +427,20 @@ impl Solver {
             .iter()
             .filter(|&&e| e == EdgeState::Unknown)
             .count();
-        eprintln!(
-            "after propagation: cut={}, uncut={}, unknown={}, total={}",
-            n_cut,
-            n_uncut,
-            n_unknown,
-            n_cut + n_uncut + n_unknown
+        tracing::info!(
+            cut = n_cut,
+            uncut = n_uncut,
+            unknown = n_unknown,
+            total = n_cut + n_uncut + n_unknown,
+            "after propagation"
         );
 
-        eprintln!("shape bank: {} shapes", self.puzzle.rules.shape_bank.len());
+        tracing::info!(shapes = self.puzzle.rules.shape_bank.len(), "shape bank");
         for (i, s) in self.puzzle.rules.shape_bank.iter().enumerate() {
-            eprintln!("  shape {}: {} cells", i, s.cells.len());
+            tracing::debug!(index = i, cells = s.cells.len(), "shape bank entry");
         }
 
-        eprintln!("grid: rows={}, cols={}", self.grid.rows, self.grid.cols);
+        tracing::info!(rows = self.grid.rows, cols = self.grid.cols, "grid dimensions");
         for r in 0..self.grid.rows {
             let mut row_str = String::new();
             for c in 0..self.grid.cols {
@@ -456,7 +456,7 @@ impl Solver {
                     row_str.push(' ');
                 }
             }
-            eprintln!("  row {}: {}", r, row_str);
+            tracing::debug!(row = r, layout = %row_str, "grid row");
         }
     }
 

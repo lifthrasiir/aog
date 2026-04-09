@@ -74,17 +74,16 @@ impl Solver {
                 });
                 if on_path {
                     let (c1, c2) = self.grid.edge_cells(e);
-                    eprintln!(
-                        "SOLUTION_KILL: prop={} edge={} cells={:?}->{:?} \
-                         forced={:?} known={:?} depth={} unknown={}",
-                        self.debug_current_prop,
-                        e,
-                        self.grid.cell_pos(c1),
-                        self.grid.cell_pos(c2),
-                        s,
-                        known,
-                        self.search_depth,
-                        self.curr_unknown,
+                    tracing::warn!(
+                        prop = self.debug_current_prop,
+                        edge = e,
+                        cell_from = ?self.grid.cell_pos(c1),
+                        cell_to = ?self.grid.cell_pos(c2),
+                        forced = ?s,
+                        known = ?known,
+                        depth = self.search_depth,
+                        unknown = self.curr_unknown,
+                        "SOLUTION_KILL"
                     );
                 }
             }
@@ -92,6 +91,14 @@ impl Solver {
         self.edges[e] = s;
         self.curr_unknown -= 1;
         self.changed.push((e, EdgeState::Unknown));
+        tracing::trace!(
+            edge = e,
+            state = ?s,
+            prop = self.debug_current_prop,
+            depth = self.search_depth,
+            unk = self.curr_unknown,
+            "set_edge"
+        );
         true
     }
 

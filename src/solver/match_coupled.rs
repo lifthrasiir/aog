@@ -181,7 +181,7 @@ impl Solver {
                         continue;
                     }
 
-                    eprintln!("coupled: rot={} flip={} rem={}", rot, flip, remaining);
+                    tracing::info!(rot, flip, remaining, "coupled: starting DFS");
 
                     self.node_count = 0;
                     self.coupled_dfs_v2(
@@ -195,10 +195,7 @@ impl Solver {
                     );
                     total_nodes += self.node_count;
                     if self.solution_count > 0 {
-                        eprintln!(
-                            "coupled: found {} solution(s) in {} nodes",
-                            self.solution_count, self.node_count
-                        );
+                        tracing::info!(solutions = self.solution_count, nodes = self.node_count, "coupled: DFS found solution(s)");
                     }
 
                     if self.solution_count >= 2 {
@@ -207,7 +204,7 @@ impl Solver {
                 }
             }
         }
-        eprintln!("coupled: explored {} DFS nodes total", total_nodes);
+        tracing::info!(total_nodes, "coupled: DFS complete");
     }
 
     /// Attempt to build initial piece assignments for a given rotation/flip/target cell.

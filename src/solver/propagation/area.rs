@@ -1258,6 +1258,12 @@ impl Solver {
 
     pub(crate) fn propagate_area_bounds(&mut self) -> Result<bool, ()> {
         let num_comp = self.build_components()?;
+        tracing::debug!(
+            num_comp,
+            depth = self.search_depth,
+            unk = self.curr_unknown,
+            "build_components"
+        );
 
         // Cut edge straddle check: if both cells of any Cut edge are in
         // the same component (connected via Uncut edges around the Cut),
@@ -1902,8 +1908,13 @@ impl Solver {
             for d in 0..4 {
                 if let Some(v) = limits[d] {
                     if comp_dir_counts[0][d] > v {
-                        eprintln!("Compass placement base_count_err: compass={:?} dir={} count={} limit={}",
-                            self.grid.cell_pos(*cell), d, comp_dir_counts[0][d], v);
+                        tracing::debug!(
+                            compass = ?self.grid.cell_pos(*cell),
+                            dir = d,
+                            count = comp_dir_counts[0][d],
+                            limit = v,
+                            "compass placement base_count_err"
+                        );
                         return Err(());
                     }
                 }
@@ -2006,9 +2017,15 @@ impl Solver {
 
                     let bit = 1u32 << lj;
                     if in_all & bit != 0 {
-                        eprintln!("Compass placement forced_uncut: compass={:?} comp0_cell={:?} other={:?} lj={} comp_dir={:?} valid={}",
-                            self.grid.cell_pos(*cell), self.grid.cell_pos(c), self.grid.cell_pos(other), lj,
-                            comp_dir_counts[lj], valid_placements.len());
+                        tracing::debug!(
+                            compass = ?self.grid.cell_pos(*cell),
+                            comp0_cell = ?self.grid.cell_pos(c),
+                            other = ?self.grid.cell_pos(other),
+                            lj,
+                            comp_dir = ?comp_dir_counts[lj],
+                            valid = valid_placements.len(),
+                            "compass placement: forced Uncut"
+                        );
                         forced_uncuts.push((eid, *cell));
                     } else if in_any & bit == 0 {
                         forced_cuts.push((eid, *cell)); // can never merge
@@ -2024,11 +2041,11 @@ impl Solver {
                 let (ea, eb) = self.grid.edge_cells(e);
                 let pa = self.grid.cell_pos(ea);
                 let pb = self.grid.cell_pos(eb);
-                eprintln!(
-                    "Compass placement forced_cut: compass={:?} cells={:?}-{:?}",
-                    self.grid.cell_pos(compass_c),
-                    pa,
-                    pb
+                tracing::debug!(
+                    compass = ?self.grid.cell_pos(compass_c),
+                    cell_a = ?pa,
+                    cell_b = ?pb,
+                    "compass placement: forcing Cut"
                 );
                 if !self.set_edge(e, EdgeState::Cut) {
                     return Err(());
@@ -2041,11 +2058,11 @@ impl Solver {
                 let (ea, eb) = self.grid.edge_cells(e);
                 let pa = self.grid.cell_pos(ea);
                 let pb = self.grid.cell_pos(eb);
-                eprintln!(
-                    "Compass placement forced_uncut_apply: compass={:?} cells={:?}-{:?}",
-                    self.grid.cell_pos(compass_c),
-                    pa,
-                    pb
+                tracing::debug!(
+                    compass = ?self.grid.cell_pos(compass_c),
+                    cell_a = ?pa,
+                    cell_b = ?pb,
+                    "compass placement: forcing Uncut"
                 );
                 if !self.set_edge(e, EdgeState::Uncut) {
                     return Err(());

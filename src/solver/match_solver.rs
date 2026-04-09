@@ -92,7 +92,7 @@ impl Solver {
         let _num_clues = non_empty.len();
 
         for &gi in &non_empty {
-            eprintln!("clue {}: {} placements", gi, groups[gi].len());
+            tracing::info!(clue = gi, placements = groups[gi].len(), "clue placements");
         }
         // If any clue that generated placements has none valid, abort
         {
@@ -135,10 +135,7 @@ impl Solver {
                         cells.iter().copied().collect::<HashSet<_>>() != known[target_clue]
                     })
                     .count();
-                eprintln!(
-                    "uniqueness check clue {}: {} alternatives",
-                    target_clue, alt_count
-                );
+                tracing::info!(clue = target_clue, alternatives = alt_count, "uniqueness check clue");
                 for (_, cells) in &groups[target_clue] {
                     if self.solution_count >= 2 {
                         break;
@@ -362,7 +359,7 @@ impl Solver {
                 if rose_count > 0 && num_pieces != rose_count {
                     continue;
                 }
-                eprintln!("\rmatch+bank: trying shape (area={})...", area);
+                tracing::info!(area, "match+bank: trying shape");
                 self.try_single_shape(shape);
             }
         } else {
@@ -380,12 +377,7 @@ impl Solver {
 
                 if area <= Self::MAX_ENUM_SIZE {
                     let shapes = polyomino::enumerate_free_polyominoes(area);
-                    eprintln!(
-                        "\rmatch: area={}, {} pieces, {} free polyominoes",
-                        area,
-                        num_pieces,
-                        shapes.len()
-                    );
+                    tracing::info!(area, pieces = num_pieces, polyominoes = shapes.len(), "match: enumerating free polyominoes");
                     for shape in &shapes {
                         if self.solution_count >= 2 {
                             return;
@@ -395,17 +387,14 @@ impl Solver {
                 } else {
                     // Coupled rigid-motion DFS for 2-piece match with rose anchors
                     if rose_count == 2 {
-                        eprintln!(
-                            "\rmatch: area={}, coupled rigid-motion DFS (2 pieces)",
-                            area
-                        );
+                        tracing::info!(area, "match: coupled rigid-motion DFS (2 pieces)");
                         self.solve_match_2piece_coupled();
                         if self.solution_count > 0 {
                             return;
                         }
                     }
                     // Fallback: edge search with tightened bounds
-                    eprintln!("\rmatch: area={} > max, edge search fallback", area);
+                    tracing::info!(area, "match: area > enum max, edge search fallback");
                     let old_min = self.eff_min_area;
                     let old_max = self.eff_max_area;
                     self.eff_min_area = area;
@@ -420,7 +409,7 @@ impl Solver {
 
         // If no enumeration path found a solution, fall back to edge search
         if self.solution_count == 0 {
-            eprintln!("\rmatch: edge search fallback");
+            tracing::info!("match: edge search fallback");
             self.backtrack_edges();
         }
     }

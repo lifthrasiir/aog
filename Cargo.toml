@@ -3,5 +3,9 @@ name = "aog_solver"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 [profile.dev]
 opt-level = 1

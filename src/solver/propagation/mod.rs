@@ -77,6 +77,13 @@ impl Solver {
     }
 
     pub(crate) fn propagate(&mut self) -> Result<bool, ()> {
+        let _prop_span = tracing::debug_span!(
+            "propagate",
+            depth = self.search_depth,
+            probe = self.in_probing
+        )
+        .entered();
+
         loop {
             let mut progress = false;
 
@@ -86,12 +93,23 @@ impl Solver {
                         self.debug_current_prop = $name;
                         let r = $call;
                         if r.is_err() && self.on_solution_path() {
-                            eprintln!(
-                                "FALSE_ERR: prop={} depth={} unknown={}",
-                                $name, self.search_depth, self.curr_unknown
+                            tracing::warn!(
+                                prop = $name,
+                                depth = self.search_depth,
+                                unknown = self.curr_unknown,
+                                "FALSE_ERR"
                             );
                         }
-                        progress |= r?;
+                        let made = r?;
+                        if made {
+                            tracing::trace!(
+                                prop = $name,
+                                depth = self.search_depth,
+                                unk = self.curr_unknown,
+                                "propagator made progress"
+                            );
+                        }
+                        progress |= made;
                     }
                 };
             }
@@ -186,7 +204,18 @@ impl Solver {
             }
 
             // Probe Cut
-            let cut_ok = self.probe(|s| s.set_edge(e, EdgeState::Cut));
+            let cut_ok = {
+                let _span = tracing::trace_span!(
+                    "probe",
+                    edge = e,
+                    val = "Cut",
+                    depth = self.search_depth,
+                    unk = self.curr_unknown
+                )
+                .entered();
+                self.probe(|s| s.set_edge(e, EdgeState::Cut))
+            };
+            tracing::trace!(edge = e, cut_ok, unk = self.curr_unknown, "probe Cut result");
 
             if !cut_ok {
                 // Cut contradicts -> force Uncut
@@ -201,7 +230,18 @@ impl Solver {
             }
 
             // Probe Uncut
-            let uncut_ok = self.probe(|s| s.set_edge(e, EdgeState::Uncut));
+            let uncut_ok = {
+                let _span = tracing::trace_span!(
+                    "probe",
+                    edge = e,
+                    val = "Uncut",
+                    depth = self.search_depth,
+                    unk = self.curr_unknown
+                )
+                .entered();
+                self.probe(|s| s.set_edge(e, EdgeState::Uncut))
+            };
+            tracing::trace!(edge = e, uncut_ok, unk = self.curr_unknown, "probe Uncut result");
 
             if !uncut_ok {
                 // Uncut contradicts -> force Cut

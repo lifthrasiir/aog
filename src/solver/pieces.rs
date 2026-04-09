@@ -370,13 +370,13 @@ impl Solver {
                     }
                 }
             }
-            eprintln!(
-                "inequality bounds: {} constraints, narrowed {} cells",
-                ineq_pairs.len(),
-                (0..n)
+            tracing::info!(
+                constraints = ineq_pairs.len(),
+                narrowed_cells = (0..n)
                     .filter(|&c| self.grid.cell_exists[c]
                         && (cell_min[c] != self.eff_min_area || cell_max[c] != self.eff_max_area))
-                    .count()
+                    .count(),
+                "inequality bounds computed"
             );
         }
 
@@ -425,10 +425,7 @@ impl Solver {
         let mut cell_to_piece = vec![usize::MAX; self.grid.num_cells()];
 
         if has_edge_constraints || !watchtower_verts.is_empty() {
-            eprintln!(
-                "piece-based search with incremental edge-clue check ({} placements)",
-                placements.len()
-            );
+            tracing::info!(placements = placements.len(), "piece-based search with incremental edge-clue check");
             self.backtrack_normal_with_check(dlx, placements, watchtower_verts, &mut cell_to_piece);
         } else {
             let mut solution = Vec::new();
