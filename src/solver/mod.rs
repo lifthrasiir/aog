@@ -139,7 +139,7 @@ impl Solver {
         // Deduce exact piece count from rose window:
         // If all rose types have the same count N, exactly N pieces are needed.
         // If counts differ, no solution exists (some type would be left out).
-        let rose_exact_piece_count = if rose_bits_all != 0 {
+        let exact_piece_count = if rose_bits_all != 0 {
             let mut type_counts: Vec<usize> = Vec::new();
             for cl in &puzzle.cell_clues {
                 if let CellClue::Rose { symbol, .. } = cl {
@@ -157,6 +157,24 @@ impl Solver {
                 Some(nonzero[0])
             } else {
                 // Differing counts → no solution (checked in solve())
+                None
+            }
+        } else {
+            None
+        };
+
+        // Solitude: exact piece count = number of clue cells (each piece has exactly one)
+        let exact_piece_count = if exact_piece_count.is_some() {
+            exact_piece_count
+        } else if puzzle.rules.solitude {
+            let clue_count = has_any_clue.iter().filter(|&&b| b).count();
+            if clue_count >= 2 {
+                tracing::info!(
+                    clue_count,
+                    "solitude: deduced exact piece count from clue cells"
+                );
+                Some(clue_count)
+            } else {
                 None
             }
         } else {
@@ -200,7 +218,7 @@ impl Solver {
                 has_palisade_clue,
                 diff_clues,
                 false,
-                rose_exact_piece_count,
+                exact_piece_count,
                 nc,
             ),
             match_coupled: match_coupled::MatchCoupledState::new(),
@@ -276,7 +294,7 @@ impl Solver {
             .count();
 
         // Rose exact piece count: if type counts differ, no solution.
-        if self.rose_bits_all != 0 && self.prop.rose_exact_piece_count.is_none() {
+        if self.rose_bits_all != 0 && self.prop.exact_piece_count.is_none() {
             return 0;
         }
 
@@ -334,7 +352,10 @@ impl Solver {
         if self.has_compass_clue {
             let n_incompat = self.init_compass_incompatibility();
             if n_incompat > 0 {
-                tracing::info!(pairs = n_incompat, "compass incompatibility: pairs forced DIFF");
+                tracing::info!(
+                    pairs = n_incompat,
+                    "compass incompatibility: pairs forced DIFF"
+                );
                 if self.propagate().is_err() {
                     return 0;
                 }
@@ -440,7 +461,11 @@ impl Solver {
             tracing::debug!(index = i, cells = s.cells.len(), "shape bank entry");
         }
 
-        tracing::info!(rows = self.grid.rows, cols = self.grid.cols, "grid dimensions");
+        tracing::info!(
+            rows = self.grid.rows,
+            cols = self.grid.cols,
+            "grid dimensions"
+        );
         for r in 0..self.grid.rows {
             let mut row_str = String::new();
             for c in 0..self.grid.cols {

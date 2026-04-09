@@ -486,7 +486,7 @@ impl Solver {
                         } else {
                             EdgeState::Unknown
                         };
-                        if sol == val {
+                        if sol == val && self.on_solution_path() {
                             tracing::warn!(
                                 edge = e,
                                 cell_from = ?self.grid.cell_pos(c1),
@@ -495,7 +495,7 @@ impl Solver {
                                 depth = self.search_depth,
                                 unk = self.curr_unknown,
                                 prop = self.debug_current_prop,
-                                "SOLUTION_KILL branch"
+                                "SOLUTION_KILL branch (on solution path)"
                             );
                         }
                     }

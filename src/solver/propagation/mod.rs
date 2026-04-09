@@ -22,13 +22,15 @@ pub(crate) struct PropagationState {
     /// must share a piece — enables grouped-area search path.
     pub(crate) same_area_groups: bool,
     /// Exact piece count deduced from rose window (None if undetermined or absent).
-    pub(crate) rose_exact_piece_count: Option<usize>,
+    pub(crate) exact_piece_count: Option<usize>,
     /// Per-component minimum area (updated each propagation round).
     pub(crate) curr_min_area: Vec<usize>,
     /// Per-component maximum area (updated each propagation round).
     pub(crate) curr_max_area: Vec<usize>,
     /// Growth edges per component (populated by build_components).
     pub(crate) growth_edges: Vec<Vec<EdgeId>>,
+    /// Number of clue cells per component (populated by build_components, solitude only).
+    pub(crate) comp_clue_cells: Vec<usize>,
     /// Reusable BFS buffer for component traversal.
     pub(crate) comp_buf: Vec<usize>,
     /// Secondary reusable BFS buffer (ID mapping etc.).
@@ -40,17 +42,18 @@ impl PropagationState {
         has_palisade_clue: bool,
         diff_clues: Vec<(EdgeId, usize)>,
         same_area_groups: bool,
-        rose_exact_piece_count: Option<usize>,
+        exact_piece_count: Option<usize>,
         nc: usize,
     ) -> Self {
         Self {
             has_palisade_clue,
             diff_clues,
             same_area_groups,
-            rose_exact_piece_count,
+            exact_piece_count,
             curr_min_area: Vec::new(),
             curr_max_area: Vec::new(),
             growth_edges: Vec::new(),
+            comp_clue_cells: Vec::new(),
             comp_buf: vec![usize::MAX; nc],
             comp_buf2: Vec::new(),
         }
@@ -60,7 +63,7 @@ impl PropagationState {
 impl Solver {
     /// Check if all currently-decided edges are consistent with the known solution.
     /// Used for debug tracing of false contradictions.
-    fn on_solution_path(&self) -> bool {
+    pub(crate) fn on_solution_path(&self) -> bool {
         if self.debug_known_solution.is_empty() || self.in_probing {
             return false;
         }
@@ -126,7 +129,7 @@ impl Solver {
             );
             run_prop!(
                 "loop_closure",
-                !self.in_probing && self.prop.rose_exact_piece_count.map_or(false, |p| p >= 2),
+                !self.in_probing && self.rose_bits_all != 0 && self.prop.exact_piece_count.map_or(false, |p| p >= 2),
                 self.propagate_loop_closure()
             );
             run_prop!(
@@ -137,7 +140,7 @@ impl Solver {
             run_prop!("area_bounds", true, self.propagate_area_bounds());
             run_prop!(
                 "dual_conn",
-                self.prop.rose_exact_piece_count.map_or(false, |p| p >= 2),
+                self.rose_bits_all != 0 && self.prop.exact_piece_count.map_or(false, |p| p >= 2),
                 self.propagate_dual_connectivity()
             );
             run_prop!("rose_parity", true, self.propagate_parity());

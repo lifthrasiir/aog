@@ -17,7 +17,7 @@ impl Solver {
     /// 3. **Bridge analysis**: cutting a bridge that creates a partition where
     ///    one side can't form a valid piece (area too small/large) → force Uncut.
     pub(crate) fn propagate_dual_connectivity(&mut self) -> Result<bool, ()> {
-        let num_pieces = match self.prop.rose_exact_piece_count {
+        let num_pieces = match self.prop.exact_piece_count {
             Some(p) if p >= 2 => p,
             _ => return Ok(false),
         };
@@ -295,7 +295,7 @@ mod tests {
     use super::*;
     use crate::solver::test_helpers::make_solver;
 
-    /// Helper: set up a 3×3 solver with rose_exact_piece_count = 2
+    /// Helper: set up a 3×3 solver with exact_piece_count = 2
     /// and run build_components via propagate_area_bounds.
     fn make_dual_solver() -> Solver {
         let mut s = make_solver(
@@ -310,7 +310,7 @@ mod tests {
 ",
         );
         s.total_cells = s.grid.total_existing_cells();
-        s.prop.rose_exact_piece_count = Some(2);
+        s.prop.exact_piece_count = Some(2);
         s.compute_area_bounds(); // sets eff_min_area, eff_max_area
         s.propagate_area_bounds().ok();
         s
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn dual_conn_bridge_too_small_side_forces_uncut() {
-        // 2×2 grid, no rose cells. Manual rose_exact_piece_count = 2.
+        // 2×2 grid, no rose cells. Manual exact_piece_count = 2.
         // minimum=2 so eff_min_area=2.
         //
         // Layout after edge setup:
@@ -338,7 +338,7 @@ mod tests {
 +---+---+
 ",
         );
-        s.prop.rose_exact_piece_count = Some(2);
+        s.prop.exact_piece_count = Some(2);
         s.total_cells = s.grid.total_existing_cells();
         s.puzzle.rules.minimum = Some(2);
         s.compute_area_bounds();
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn dual_conn_exact_cc_match_forces_all_uncut() {
         // Set up a 3x3 grid where the component graph has exactly 2 cc's.
-        // With rose_exact_piece_count = 2, all internal edges forced Uncut.
+        // With exact_piece_count = 2, all internal edges forced Uncut.
         let mut s = make_dual_solver();
 
         // Cut all horizontal edges on row 0 (between rows 0 and 1)
@@ -467,7 +467,7 @@ mod tests {
 +---+---+---+---+
 ",
         );
-        s.prop.rose_exact_piece_count = Some(2);
+        s.prop.exact_piece_count = Some(2);
         s.total_cells = s.grid.total_existing_cells();
         s.compute_area_bounds();
 

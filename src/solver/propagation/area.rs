@@ -91,11 +91,16 @@ impl Solver {
         }
         let mut comp_clues = vec![Vec::new(); num_comp]; // This one is still a bit heavy, but clues are few
         let mut comp_rose: Vec<u8> = vec![0u8; num_comp];
+        self.prop.comp_clue_cells.clear();
+        self.prop.comp_clue_cells.resize(num_comp, 0);
         for c in 0..n {
             if self.grid.cell_exists[c] {
                 let ci = self.curr_comp_id[c];
                 self.curr_comp_sz[ci] += 1;
                 self.comp_cells[ci].push(c);
+                if self.has_any_clue[c] {
+                    self.prop.comp_clue_cells[ci] += 1;
+                }
                 for &clue_idx in &self.cell_clues_indexed[c] {
                     let cl = &self.puzzle.cell_clues[clue_idx];
                     if let CellClue::Rose { symbol, .. } = cl {
@@ -106,6 +111,16 @@ impl Solver {
                         comp_rose[ci] |= bit;
                     }
                     comp_clues[ci].push(cl);
+                }
+            }
+        }
+
+        // Solitude: each piece must have exactly one clue cell.
+        // If any component already has 2+ clue cells, contradiction.
+        if self.puzzle.rules.solitude {
+            for ci in 0..num_comp {
+                if self.prop.comp_clue_cells[ci] > 1 {
+                    return Err(());
                 }
             }
         }
@@ -199,7 +214,8 @@ impl Solver {
             let ci2 = self.curr_comp_id[c2];
             if ci1 != ci2 {
                 let cannot_merge = if self.puzzle.rules.solitude {
-                    self.curr_target_area[ci1].is_some() && self.curr_target_area[ci2].is_some()
+                    // Both components have clue cells → merge gives 2+ clues → violation
+                    self.prop.comp_clue_cells[ci1] >= 1 && self.prop.comp_clue_cells[ci2] >= 1
                 } else if let (Some(a1), Some(a2)) =
                     (self.curr_target_area[ci1], self.curr_target_area[ci2])
                 {
@@ -306,10 +322,10 @@ impl Solver {
             rose_cut_ef.apply(self)?;
         }
 
-        // === Rose exact piece count cap ===
+        // === Exact piece count cap ===
         // If we know there are exactly K pieces, and K components are already sealed,
         // all remaining inter-component edges must be Cut (no more pieces allowed).
-        if let Some(k) = self.prop.rose_exact_piece_count {
+        if let Some(k) = self.prop.exact_piece_count {
             let sealed_count = self.sealed(num_comp).count();
             if sealed_count > k {
                 return Err(());
@@ -1305,6 +1321,45 @@ impl Solver {
             }
         }
 
+        // === Solitude propagation ===
+        // Each piece must have exactly one clue cell. Components without clue cells
+        // must merge with a clue-bearing component. Sealed clue-less → contradiction.
+        // Single growth edge on clue-less → force Uncut.
+        if self.puzzle.rules.solitude {
+            let mut solitude_forced = false;
+            for ci in 0..num_comp {
+                if self.prop.comp_clue_cells[ci] > 0 {
+                    continue;
+                }
+                // This component has no clue cell — it must merge.
+                let mut unk_count = 0usize;
+                let mut unk_edge = 0;
+                for &e in &self.prop.growth_edges[ci] {
+                    if self.edges[e] == EdgeState::Unknown {
+                        unk_count += 1;
+                        unk_edge = e;
+                        if unk_count > 1 {
+                            break;
+                        }
+                    }
+                }
+                if unk_count == 0 {
+                    // Sealed with no clue → contradiction
+                    return Err(());
+                }
+                if unk_count == 1 {
+                    // Only one way to merge → force Uncut
+                    if !self.set_edge(unk_edge, EdgeState::Uncut) {
+                        return Err(());
+                    }
+                    solitude_forced = true;
+                }
+            }
+            if solitude_forced {
+                return Ok(true); // component state stale, re-run
+            }
+        }
+
         let progress = self.propagate_area_constraints(num_comp)?;
         self.propagate_shape_constraints(num_comp)?;
         self.check_complement_feasibility(num_comp)?;
@@ -1692,7 +1747,7 @@ impl Solver {
     /// components appear in all/no valid placements.
     fn propagate_compass_placement_enumeration(&mut self, _num_comp: usize) -> Result<bool, ()> {
         self.debug_current_prop = "compass_place_enum";
-        const MAX_AREA_THRESHOLD: usize = 8;
+        const MAX_AREA_THRESHOLD: usize = 12;
         const MAX_REACHABLE_COMPS: usize = 16;
         const MAX_PLACEMENTS: usize = 500;
 

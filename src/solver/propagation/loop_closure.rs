@@ -9,11 +9,11 @@ impl Solver {
     /// If an interior loop closes while open path segments still exist,
     /// those segments can never merge with the closed loop → contradiction.
     ///
-    /// For puzzles with a known piece count (rose_exact_piece_count),
+    /// For puzzles with a known piece count (exact_piece_count),
     /// the number of closed loops cannot exceed pieces - 1.
     pub(crate) fn propagate_loop_closure(&mut self) -> Result<bool, ()> {
         // Only meaningful when piece count is known (need it for loop limit)
-        let max_loops = match self.prop.rose_exact_piece_count {
+        let max_loops = match self.prop.exact_piece_count {
             Some(p) if p >= 2 => p - 1,
             _ => return Ok(false),
         };

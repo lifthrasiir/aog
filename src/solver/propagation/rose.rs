@@ -238,7 +238,7 @@ impl Solver {
 
         let n = self.grid.num_cells();
         let ne = self.grid.num_edges();
-        let two_piece = self.prop.rose_exact_piece_count == Some(2);
+        let two_piece = self.prop.exact_piece_count == Some(2);
 
         let mut uf = ParityUF::new(n);
 
