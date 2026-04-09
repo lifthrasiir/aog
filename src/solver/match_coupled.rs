@@ -125,127 +125,26 @@ impl Solver {
                     if dst == anchor1 {
                         continue;
                     }
-                    let (dr, dc) = {
-                        let (dr_, dc_) = self.grid.cell_pos(dst);
-                        (dr_ as i32 - sa_r, dc_ as i32 - sa_c)
+
+                    let Some((fwd, mut in_p1, mut in_p2, init_size)) =
+                        self.try_init_coupled_partition(
+                            rot, flip, dst, sa_r, sa_c,
+                            anchor1, anchor2, target,
+                            &pos_to_cell, &existing_cells, n,
+                        )
+                    else {
+                        continue;
                     };
-
-                    // Build forward (T) and backward (T⁻¹) maps
-                    let mut fwd: Vec<Option<CellId>> = vec![None; n];
-                    let mut bwd: Vec<Option<CellId>> = vec![None; n];
-                    let mut ok = true;
-                    for &cell in &existing_cells {
-                        let (r, c) = self.grid.cell_pos(cell);
-                        let (nr, nc) = Self::apply_sigma(rot, flip, r as i32, c as i32);
-                        if let Some(&mapped) = pos_to_cell.get(&(nr + dr, nc + dc)) {
-                            if mapped == cell {
-                                ok = false;
-                                break;
-                            }
-                            fwd[cell] = Some(mapped);
-                            bwd[mapped] = Some(cell);
-                        }
-                    }
-                    if !ok {
-                        continue;
-                    }
-
-                    // Classify cells
-                    let mut forced_p1 = 0usize;
-                    let mut forced_p2 = 0usize;
-                    for &cell in &existing_cells {
-                        let in_img = bwd[cell].is_some();
-                        let in_dom = fwd[cell].is_some();
-                        if !in_img && !in_dom {
-                            ok = false;
-                            break;
-                        }
-                        if !in_img {
-                            forced_p1 += 1;
-                        }
-                        if !in_dom {
-                            forced_p2 += 1;
-                        }
-                    }
-                    if !ok {
-                        continue;
-                    }
-                    if forced_p1 > target || forced_p2 > target {
-                        continue;
-                    }
-
-                    // A1 must have T(A1) defined
-                    if fwd[anchor1].is_none() {
-                        continue;
-                    }
-                    // T⁻¹(A2) must exist
-                    let a2_pre = match bwd[anchor2] {
-                        Some(c) => c,
-                        None => continue,
-                    };
-                    if fwd[a2_pre].is_none() {
-                        continue;
-                    }
-
-                    // Build initial piece1 and piece2
-                    let mut in_p1 = vec![false; n];
-                    let mut in_p2 = vec![false; n];
-
-                    // forced_p1 cells into piece1
-                    for &cell in &existing_cells {
-                        if bwd[cell].is_none() {
-                            in_p1[cell] = true;
-                        }
-                    }
-                    // forced_p2 cells into piece2
-                    for &cell in &existing_cells {
-                        if fwd[cell].is_none() {
-                            in_p2[cell] = true;
-                        }
-                    }
-                    // A1 and T⁻¹(A2) into piece1
-                    in_p1[anchor1] = true;
-                    in_p1[a2_pre] = true;
-                    // preimages of forced_p2 into piece1
-                    for &cell in &existing_cells {
-                        if fwd[cell].is_none() {
-                            // cell ∈ forced_p2, its preimage must be in piece1
-                            if let Some(pre) = bwd[cell] {
-                                in_p1[pre] = true;
-                            }
-                        }
-                    }
-
-                    let init_size = in_p1.iter().filter(|&&x| x).count();
-                    if init_size > target {
-                        continue;
-                    }
-                    // Add T-images of init piece1 to piece2
-                    for &cell in &existing_cells {
-                        if in_p1[cell] {
-                            if let Some(tc) = fwd[cell] {
-                                in_p2[tc] = true;
-                            }
-                        }
-                    }
-
-                    // Don't check piece1 connectivity upfront — DFS may bridge
 
                     let remaining = target - init_size;
                     if remaining == 0 {
                         // piece1 already complete — verify connectivity + coverage
                         let all_covered = existing_cells.iter().all(|&c| in_p1[c] || in_p2[c]);
                         if all_covered && Self::is_connected_set(&adj, &in_p1, &existing_cells) {
-                            let p1: Vec<CellId> = existing_cells
-                                .iter()
-                                .filter(|&&c| in_p1[c])
-                                .copied()
-                                .collect();
-                            let p2: Vec<CellId> = existing_cells
-                                .iter()
-                                .filter(|&&c| in_p2[c])
-                                .copied()
-                                .collect();
+                            let p1: Vec<CellId> =
+                                existing_cells.iter().filter(|&&c| in_p1[c]).copied().collect();
+                            let p2: Vec<CellId> =
+                                existing_cells.iter().filter(|&&c| in_p2[c]).copied().collect();
                             self.record_bipartite_solution(&p1, &p2);
                             if self.solution_count >= 2 {
                                 return;
@@ -254,7 +153,7 @@ impl Solver {
                         continue;
                     }
 
-                    eprintln!("coupled: rot={} flip={} rem={}", rot, flip, remaining,);
+                    eprintln!("coupled: rot={} flip={} rem={}", rot, flip, remaining);
 
                     self.node_count = 0;
                     self.coupled_dfs_v2(
@@ -281,6 +180,113 @@ impl Solver {
             }
         }
         eprintln!("coupled: explored {} DFS nodes total", total_nodes);
+    }
+
+    /// Attempt to build initial piece assignments for a given rotation/flip/target cell.
+    /// Returns `Some((fwd, in_p1, in_p2, init_size))` on success, `None` if invalid
+    /// (e.g. transform maps can't be built, or forced cells exceed target size).
+    /// `fwd` is the forward transform map T, needed by the DFS.
+    #[allow(clippy::too_many_arguments)]
+    fn try_init_coupled_partition(
+        &self,
+        rot: usize,
+        flip: bool,
+        dst: CellId,
+        sa_r: i32,
+        sa_c: i32,
+        anchor1: CellId,
+        anchor2: CellId,
+        target: usize,
+        pos_to_cell: &HashMap<(i32, i32), CellId>,
+        existing_cells: &[CellId],
+        n: usize,
+    ) -> Option<(Vec<Option<CellId>>, Vec<bool>, Vec<bool>, usize)> {
+        let (dr, dc) = {
+            let (dr_, dc_) = self.grid.cell_pos(dst);
+            (dr_ as i32 - sa_r, dc_ as i32 - sa_c)
+        };
+
+        // Build forward (T) and backward (T⁻¹) maps
+        let mut fwd: Vec<Option<CellId>> = vec![None; n];
+        let mut bwd: Vec<Option<CellId>> = vec![None; n];
+        for &cell in existing_cells {
+            let (r, c) = self.grid.cell_pos(cell);
+            let (nr, nc) = Self::apply_sigma(rot, flip, r as i32, c as i32);
+            if let Some(&mapped) = pos_to_cell.get(&(nr + dr, nc + dc)) {
+                if mapped == cell {
+                    return None; // T(cell) = cell would create a fixed point
+                }
+                fwd[cell] = Some(mapped);
+                bwd[mapped] = Some(cell);
+            }
+        }
+
+        // Classify cells: count forced-into-p1 (not in image) and forced-into-p2 (not in domain)
+        let mut forced_p1 = 0usize;
+        let mut forced_p2 = 0usize;
+        for &cell in existing_cells {
+            let in_img = bwd[cell].is_some();
+            let in_dom = fwd[cell].is_some();
+            if !in_img && !in_dom {
+                return None; // cell unreachable by either piece
+            }
+            if !in_img {
+                forced_p1 += 1;
+            }
+            if !in_dom {
+                forced_p2 += 1;
+            }
+        }
+        if forced_p1 > target || forced_p2 > target {
+            return None;
+        }
+
+        // A1 must have T(A1) defined; T⁻¹(A2) must exist and have T defined
+        if fwd[anchor1].is_none() {
+            return None;
+        }
+        let a2_pre = bwd[anchor2]?;
+        if fwd[a2_pre].is_none() {
+            return None;
+        }
+
+        // Build initial piece assignments
+        let mut in_p1 = vec![false; n];
+        let mut in_p2 = vec![false; n];
+
+        for &cell in existing_cells {
+            if bwd[cell].is_none() {
+                in_p1[cell] = true; // forced into piece1 (not in image of T)
+            }
+            if fwd[cell].is_none() {
+                in_p2[cell] = true; // forced into piece2 (not in domain of T)
+            }
+        }
+        in_p1[anchor1] = true;
+        in_p1[a2_pre] = true;
+        // Preimages of forced_p2 cells must also be in piece1
+        for &cell in existing_cells {
+            if fwd[cell].is_none() {
+                if let Some(pre) = bwd[cell] {
+                    in_p1[pre] = true;
+                }
+            }
+        }
+
+        let init_size = in_p1.iter().filter(|&&x| x).count();
+        if init_size > target {
+            return None;
+        }
+        // Add T-images of piece1 to piece2
+        for &cell in existing_cells {
+            if in_p1[cell] {
+                if let Some(tc) = fwd[cell] {
+                    in_p2[tc] = true;
+                }
+            }
+        }
+
+        Some((fwd, in_p1, in_p2, init_size))
     }
 
     pub(crate) fn is_connected_set(

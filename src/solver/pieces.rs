@@ -273,16 +273,14 @@ impl Solver {
             })
             .sum();
 
-        let use_clue_mode =
-            self.puzzle.rules.shape_bank.is_empty() && total_clue_area == self.total_cells;
-
-        let num_cells = self.total_cells;
-        let num_clues = if use_clue_mode {
-            self.puzzle.cell_clues.len()
+        if self.puzzle.rules.shape_bank.is_empty() && total_clue_area == self.total_cells {
+            self.backtrack_clue_mode();
         } else {
-            0
-        };
+            self.backtrack_normal_mode();
+        }
+    }
 
+    fn build_cell_to_col(&self) -> Vec<usize> {
         let mut cell_to_col = vec![usize::MAX; self.grid.num_cells()];
         let mut active_count = 0;
         for c in 0..self.grid.num_cells() {
@@ -291,19 +289,154 @@ impl Solver {
                 active_count += 1;
             }
         }
+        cell_to_col
+    }
+
+    fn backtrack_clue_mode(&mut self) {
+        let num_cells = self.total_cells;
+        let num_clues = self.puzzle.cell_clues.len();
+        let cell_to_col = self.build_cell_to_col();
 
         let mut dlx = Dlx::new(num_cells + num_clues);
+        let placements = self.generate_clue_placements();
+        for (i, (clue_idx, p)) in placements.iter().enumerate() {
+            let mut cols: Vec<usize> = p.cells.iter().map(|&c| cell_to_col[c]).collect();
+            cols.push(num_cells + clue_idx);
+            cols.sort();
+            dlx.add_row(i, &cols);
+        }
 
-        if use_clue_mode {
-            let placements = self.generate_clue_placements();
-            for (i, (clue_idx, p)) in placements.iter().enumerate() {
-                let mut cols: Vec<usize> = p.cells.iter().map(|&c| cell_to_col[c]).collect();
-                cols.push(num_cells + clue_idx);
-                cols.sort();
-                dlx.add_row(i, &cols);
+        let mut cell_to_piece = vec![usize::MAX; self.grid.num_cells()];
+        let mut solution = Vec::new();
+        dlx.search(&mut solution, &mut |sol_rows| {
+            let snap = self.snapshot();
+            let pieces: Vec<Piece> = sol_rows
+                .iter()
+                .enumerate()
+                .map(|(pi, &idx)| {
+                    let p = placements[idx].1.clone();
+                    for &cid in &p.cells {
+                        cell_to_piece[cid] = pi;
+                    }
+                    p
+                })
+                .collect();
+            self.set_edges_from_pieces(&pieces, &cell_to_piece);
+            if self.validate(&pieces) {
+                self.save_solution(pieces);
             }
+            self.restore(snap);
+            self.solution_count < 2
+        });
+    }
 
-            let mut cell_to_piece = vec![usize::MAX; self.grid.num_cells()];
+    fn backtrack_normal_mode(&mut self) {
+        let num_cells = self.total_cells;
+        let cell_to_col = self.build_cell_to_col();
+
+        // Compute cell area bounds from inequality constraints (arc consistency)
+        let n = self.grid.num_cells();
+        let mut cell_min = vec![self.eff_min_area; n];
+        let mut cell_max = vec![self.eff_max_area; n];
+
+        let mut ineq_pairs: Vec<(CellId, CellId)> = Vec::new();
+        for cl in &self.puzzle.edge_clues {
+            if let EdgeClueKind::Inequality { smaller_first } = cl.kind {
+                let (c1, c2) = self.grid.edge_cells(cl.edge);
+                if self.grid.cell_exists[c1] && self.grid.cell_exists[c2] {
+                    if smaller_first {
+                        ineq_pairs.push((c1, c2)); // area(c1) < area(c2)
+                    } else {
+                        ineq_pairs.push((c2, c1)); // area(c2) < area(c1)
+                    }
+                }
+            }
+        }
+
+        if !ineq_pairs.is_empty() {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for &(small, large) in &ineq_pairs {
+                    let new_max_small = cell_max[large].saturating_sub(1);
+                    if cell_max[small] > new_max_small {
+                        cell_max[small] = new_max_small;
+                        changed = true;
+                    }
+                    let new_min_large = cell_min[small].saturating_add(1);
+                    if cell_min[large] < new_min_large {
+                        cell_min[large] = new_min_large;
+                        changed = true;
+                    }
+                }
+            }
+            eprintln!(
+                "inequality bounds: {} constraints, narrowed {} cells",
+                ineq_pairs.len(),
+                (0..n)
+                    .filter(|&c| self.grid.cell_exists[c]
+                        && (cell_min[c] != self.eff_min_area
+                            || cell_max[c] != self.eff_max_area))
+                    .count()
+            );
+        }
+
+        let placements = self.generate_placements(&cell_min, &cell_max);
+        let mut dlx = Dlx::new(num_cells);
+        for (i, p) in placements.iter().enumerate() {
+            let mut cols: Vec<usize> = p.cells.iter().map(|&c| cell_to_col[c]).collect();
+            cols.sort();
+            dlx.add_row(i, &cols);
+        }
+
+        // Check if incremental checking is beneficial
+        let has_edge_constraints = self.puzzle.edge_clues.iter().any(|cl| {
+            matches!(
+                cl.kind,
+                EdgeClueKind::Inequality { .. }
+                    | EdgeClueKind::Delta
+                    | EdgeClueKind::Gemini
+                    | EdgeClueKind::Diff { .. }
+            )
+        }) || self.puzzle.rules.size_separation
+            || self.puzzle.rules.mingle_shape
+            || !self.puzzle.vertex_clues.is_empty();
+
+        // Pre-compute watchtower vertex data for row_check
+        let watchtower_verts: Vec<(Vec<CellId>, usize)> = self
+            .puzzle
+            .vertex_clues
+            .iter()
+            .filter_map(|clue| {
+                let (vi, vj) = self.grid.vertex_pos(clue.vertex);
+                let cell_opts = self.grid.vertex_cells(vi, vj);
+                let cells: Vec<CellId> = cell_opts
+                    .into_iter()
+                    .flatten()
+                    .filter(|&cid| self.grid.cell_exists[cid])
+                    .collect();
+                if cells.len() >= 2 && clue.value <= cells.len() {
+                    Some((cells, clue.value))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let mut cell_to_piece = vec![usize::MAX; self.grid.num_cells()];
+
+        if has_edge_constraints || !watchtower_verts.is_empty() {
+            eprintln!(
+                "piece-based search with incremental edge-clue check ({} placements)",
+                placements.len()
+            );
+            self.backtrack_normal_with_check(
+                dlx,
+                placements,
+                watchtower_verts,
+                &mut cell_to_piece,
+            );
+        } else {
             let mut solution = Vec::new();
             dlx.search(&mut solution, &mut |sol_rows| {
                 let snap = self.snapshot();
@@ -311,302 +444,179 @@ impl Solver {
                     .iter()
                     .enumerate()
                     .map(|(pi, &idx)| {
-                        let p = placements[idx].1.clone();
+                        let p = placements[idx].clone();
                         for &cid in &p.cells {
                             cell_to_piece[cid] = pi;
                         }
                         p
                     })
                     .collect();
-
-                // Temporary set edges based on pieces for validation
                 self.set_edges_from_pieces(&pieces, &cell_to_piece);
-
                 if self.validate(&pieces) {
                     self.save_solution(pieces);
                 }
                 self.restore(snap);
                 self.solution_count < 2
             });
-        } else {
-            // Compute cell area bounds from inequality constraints (arc consistency)
-            let n = self.grid.num_cells();
-            let mut cell_min = vec![self.eff_min_area; n];
-            let mut cell_max = vec![self.eff_max_area; n];
+        }
+    }
 
-            let mut ineq_pairs: Vec<(CellId, CellId)> = Vec::new();
-            for cl in &self.puzzle.edge_clues {
-                if let EdgeClueKind::Inequality { smaller_first } = cl.kind {
-                    let (c1, c2) = self.grid.edge_cells(cl.edge);
-                    if self.grid.cell_exists[c1] && self.grid.cell_exists[c2] {
-                        if smaller_first {
-                            ineq_pairs.push((c1, c2)); // area(c1) < area(c2)
-                        } else {
-                            ineq_pairs.push((c2, c1)); // area(c2) < area(c1)
+    fn backtrack_normal_with_check(
+        &mut self,
+        mut dlx: Dlx,
+        placements: Vec<Piece>,
+        watchtower_verts: Vec<(Vec<CellId>, usize)>,
+        cell_to_piece: &mut Vec<usize>,
+    ) {
+        // Pre-compute edge constraint pairs: (cell1, cell2, kind)
+        let edge_constraints: Vec<(CellId, CellId, EdgeClueKind)> = self
+            .puzzle
+            .edge_clues
+            .iter()
+            .filter_map(|cl| {
+                let (c1, c2) = self.grid.edge_cells(cl.edge);
+                if self.grid.cell_exists[c1] && self.grid.cell_exists[c2] {
+                    Some((c1, c2, cl.kind))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Pre-compute all adjacent cell pairs for size_separation/mingle_shape checks
+        let adjacent_pairs: Vec<(CellId, CellId)> = (0..self.grid.num_edges())
+            .filter_map(|e| {
+                let (c1, c2) = self.grid.edge_cells(e);
+                if self.grid.cell_exists[c1] && self.grid.cell_exists[c2] {
+                    Some((c1, c2))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let check_size_sep = self.puzzle.rules.size_separation;
+        let check_mingle = self.puzzle.rules.mingle_shape;
+
+        let mut row_check_buf = vec![usize::MAX; self.grid.num_cells()];
+        let mut row_check = |solution: &[usize]| -> bool {
+            // Rebuild cell→piece mapping from solution
+            row_check_buf.fill(usize::MAX);
+            for (pi, &row_id) in solution.iter().enumerate() {
+                for &c in &placements[row_id].cells {
+                    row_check_buf[c] = pi;
+                }
+            }
+            // Check each edge constraint where both cells are assigned
+            for &(c1, c2, kind) in &edge_constraints {
+                let p1 = row_check_buf[c1];
+                let p2 = row_check_buf[c2];
+                if p1 == usize::MAX || p2 == usize::MAX {
+                    continue;
+                }
+                let a1 = placements[solution[p1]].area;
+                let a2 = placements[solution[p2]].area;
+                let s1 = &placements[solution[p1]].canonical;
+                let s2 = &placements[solution[p2]].canonical;
+                match kind {
+                    EdgeClueKind::Inequality { smaller_first } => {
+                        if smaller_first && a1 >= a2 {
+                            return false;
+                        }
+                        if !smaller_first && a2 >= a1 {
+                            return false;
+                        }
+                    }
+                    EdgeClueKind::Delta => {
+                        if s1 == s2 {
+                            return false;
+                        }
+                    }
+                    EdgeClueKind::Gemini => {
+                        if s1 != s2 {
+                            return false;
+                        }
+                    }
+                    EdgeClueKind::Diff { value } => {
+                        if a1.abs_diff(a2) != value {
+                            return false;
                         }
                     }
                 }
             }
 
-            if !ineq_pairs.is_empty() {
-                let mut changed = true;
-                while changed {
-                    changed = false;
-                    for &(small, large) in &ineq_pairs {
-                        let new_max_small = cell_max[large].saturating_sub(1);
-                        if cell_max[small] > new_max_small {
-                            cell_max[small] = new_max_small;
-                            changed = true;
-                        }
-                        let new_min_large = cell_min[small].saturating_add(1);
-                        if cell_min[large] < new_min_large {
-                            cell_min[large] = new_min_large;
-                            changed = true;
-                        }
+            // Size separation: adjacent pieces must have different areas
+            if check_size_sep {
+                for &(c1, c2) in &adjacent_pairs {
+                    let p1 = row_check_buf[c1];
+                    let p2 = row_check_buf[c2];
+                    if p1 == usize::MAX || p2 == usize::MAX || p1 == p2 {
+                        continue;
+                    }
+                    if placements[solution[p1]].area == placements[solution[p2]].area {
+                        return false;
                     }
                 }
-                eprintln!(
-                    "inequality bounds: {} constraints, narrowed {} cells",
-                    ineq_pairs.len(),
-                    (0..n)
-                        .filter(|&c| self.grid.cell_exists[c]
-                            && (cell_min[c] != self.eff_min_area
-                                || cell_max[c] != self.eff_max_area))
-                        .count()
-                );
             }
 
-            let placements = self.generate_placements(&cell_min, &cell_max);
-            for (i, p) in placements.iter().enumerate() {
-                let mut cols: Vec<usize> = p.cells.iter().map(|&c| cell_to_col[c]).collect();
-                cols.sort();
-                dlx.add_row(i, &cols);
+            // Mingle shape: adjacent pieces must have same shape
+            if check_mingle {
+                for &(c1, c2) in &adjacent_pairs {
+                    let p1 = row_check_buf[c1];
+                    let p2 = row_check_buf[c2];
+                    if p1 == usize::MAX || p2 == usize::MAX || p1 == p2 {
+                        continue;
+                    }
+                    if placements[solution[p1]].canonical != placements[solution[p2]].canonical {
+                        return false;
+                    }
+                }
             }
 
-            // Check if incremental checking is beneficial
-            let has_edge_constraints = self.puzzle.edge_clues.iter().any(|cl| {
-                matches!(
-                    cl.kind,
-                    EdgeClueKind::Inequality { .. }
-                        | EdgeClueKind::Delta
-                        | EdgeClueKind::Gemini
-                        | EdgeClueKind::Diff { .. }
-                )
-            }) || self.puzzle.rules.size_separation
-                || self.puzzle.rules.mingle_shape
-                || !self.puzzle.vertex_clues.is_empty();
+            // Watchtower: distinct pieces at vertex must match target
+            for (cells, value) in &watchtower_verts {
+                let mut pieces: Vec<usize> = Vec::new();
+                let mut all_assigned = true;
+                for &c in cells {
+                    let p = row_check_buf[c];
+                    if p == usize::MAX {
+                        all_assigned = false;
+                    } else if !pieces.contains(&p) {
+                        pieces.push(p);
+                    }
+                }
+                let distinct = pieces.len();
+                if distinct > *value {
+                    return false;
+                }
+                if all_assigned && distinct != *value {
+                    return false;
+                }
+            }
 
-            // Pre-compute watchtower vertex data for row_check
-            let watchtower_verts: Vec<(Vec<CellId>, usize)> = self
-                .puzzle
-                .vertex_clues
+            true
+        };
+
+        let mut solution = Vec::new();
+        dlx.search_with_check(&mut solution, &mut row_check, &mut |sol_rows| {
+            let snap = self.snapshot();
+            let pieces: Vec<Piece> = sol_rows
                 .iter()
-                .filter_map(|clue| {
-                    let (vi, vj) = self.grid.vertex_pos(clue.vertex);
-                    let cell_opts = self.grid.vertex_cells(vi, vj);
-                    let cells: Vec<CellId> = cell_opts
-                        .into_iter()
-                        .flatten()
-                        .filter(|&cid| self.grid.cell_exists[cid])
-                        .collect();
-                    if cells.len() >= 2 && clue.value <= cells.len() {
-                        Some((cells, clue.value))
-                    } else {
-                        None
+                .enumerate()
+                .map(|(pi, &idx)| {
+                    let p = placements[idx].clone();
+                    for &cid in &p.cells {
+                        cell_to_piece[cid] = pi;
                     }
+                    p
                 })
                 .collect();
-
-            if has_edge_constraints || !watchtower_verts.is_empty() {
-                eprintln!(
-                    "piece-based search with incremental edge-clue check ({} placements)",
-                    placements.len()
-                );
-
-                // Pre-compute edge constraint pairs: (cell1, cell2, kind)
-                let edge_constraints: Vec<(CellId, CellId, EdgeClueKind)> = self
-                    .puzzle
-                    .edge_clues
-                    .iter()
-                    .filter_map(|cl| {
-                        let (c1, c2) = self.grid.edge_cells(cl.edge);
-                        if self.grid.cell_exists[c1] && self.grid.cell_exists[c2] {
-                            Some((c1, c2, cl.kind))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                // Pre-compute all adjacent cell pairs for size_separation/mingle_shape checks
-                let adjacent_pairs: Vec<(CellId, CellId)> = (0..self.grid.num_edges())
-                    .filter_map(|e| {
-                        let (c1, c2) = self.grid.edge_cells(e);
-                        if self.grid.cell_exists[c1] && self.grid.cell_exists[c2] {
-                            Some((c1, c2))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                let num_cells_total = self.grid.num_cells();
-                let mut cell_to_piece = vec![usize::MAX; num_cells_total];
-                let check_size_sep = self.puzzle.rules.size_separation;
-                let check_mingle = self.puzzle.rules.mingle_shape;
-
-                let mut row_check = |solution: &[usize]| -> bool {
-                    // Rebuild cell→piece mapping from solution
-                    cell_to_piece.fill(usize::MAX);
-                    for (pi, &row_id) in solution.iter().enumerate() {
-                        for &c in &placements[row_id].cells {
-                            cell_to_piece[c] = pi;
-                        }
-                    }
-                    // Check each edge constraint where both cells are assigned
-                    for &(c1, c2, kind) in &edge_constraints {
-                        let p1 = cell_to_piece[c1];
-                        let p2 = cell_to_piece[c2];
-                        if p1 == usize::MAX || p2 == usize::MAX {
-                            continue;
-                        }
-                        let a1 = placements[solution[p1]].area;
-                        let a2 = placements[solution[p2]].area;
-                        let s1 = &placements[solution[p1]].canonical;
-                        let s2 = &placements[solution[p2]].canonical;
-                        match kind {
-                            EdgeClueKind::Inequality { smaller_first } => {
-                                if smaller_first && a1 >= a2 {
-                                    return false;
-                                }
-                                if !smaller_first && a2 >= a1 {
-                                    return false;
-                                }
-                            }
-                            EdgeClueKind::Delta => {
-                                if s1 == s2 {
-                                    return false;
-                                }
-                            }
-                            EdgeClueKind::Gemini => {
-                                if s1 != s2 {
-                                    return false;
-                                }
-                            }
-                            EdgeClueKind::Diff { value } => {
-                                if a1.abs_diff(a2) != value {
-                                    return false;
-                                }
-                            }
-                        }
-                    }
-
-                    // Size separation: adjacent pieces must have different areas
-                    if check_size_sep {
-                        for &(c1, c2) in &adjacent_pairs {
-                            let p1 = cell_to_piece[c1];
-                            let p2 = cell_to_piece[c2];
-                            if p1 == usize::MAX || p2 == usize::MAX || p1 == p2 {
-                                continue;
-                            }
-                            if placements[solution[p1]].area == placements[solution[p2]].area {
-                                return false;
-                            }
-                        }
-                    }
-
-                    // Mingle shape: adjacent pieces must have same shape
-                    if check_mingle {
-                        for &(c1, c2) in &adjacent_pairs {
-                            let p1 = cell_to_piece[c1];
-                            let p2 = cell_to_piece[c2];
-                            if p1 == usize::MAX || p2 == usize::MAX || p1 == p2 {
-                                continue;
-                            }
-                            if placements[solution[p1]].canonical
-                                != placements[solution[p2]].canonical
-                            {
-                                return false;
-                            }
-                        }
-                    }
-
-                    // Watchtower: distinct pieces at vertex must match target
-                    for (cells, value) in &watchtower_verts {
-                        let mut pieces: Vec<usize> = Vec::new();
-                        let mut all_assigned = true;
-                        for &c in cells {
-                            let p = cell_to_piece[c];
-                            if p == usize::MAX {
-                                all_assigned = false;
-                            } else if !pieces.contains(&p) {
-                                pieces.push(p);
-                            }
-                        }
-                        let distinct = pieces.len();
-                        if distinct > *value {
-                            return false;
-                        }
-                        if all_assigned && distinct != *value {
-                            return false;
-                        }
-                    }
-
-                    true
-                };
-
-                let mut cell_to_piece_final = vec![usize::MAX; num_cells_total];
-                let mut solution = Vec::new();
-                dlx.search_with_check(&mut solution, &mut row_check, &mut |sol_rows| {
-                    let snap = self.snapshot();
-                    let pieces: Vec<Piece> = sol_rows
-                        .iter()
-                        .enumerate()
-                        .map(|(pi, &idx)| {
-                            let p = placements[idx].clone();
-                            for &cid in &p.cells {
-                                cell_to_piece_final[cid] = pi;
-                            }
-                            p
-                        })
-                        .collect();
-
-                    // Temporary set edges based on pieces for validation
-                    self.set_edges_from_pieces(&pieces, &cell_to_piece_final);
-
-                    if self.validate(&pieces) {
-                        self.save_solution(pieces);
-                    }
-                    self.restore(snap);
-                    self.solution_count < 2
-                });
-            } else {
-                let mut cell_to_piece_simple = vec![usize::MAX; self.grid.num_cells()];
-                let mut solution = Vec::new();
-                dlx.search(&mut solution, &mut |sol_rows| {
-                    let snap = self.snapshot();
-                    let pieces: Vec<Piece> = sol_rows
-                        .iter()
-                        .enumerate()
-                        .map(|(pi, &idx)| {
-                            let p = placements[idx].clone();
-                            for &cid in &p.cells {
-                                cell_to_piece_simple[cid] = pi;
-                            }
-                            p
-                        })
-                        .collect();
-
-                    // Temporary set edges based on pieces for validation
-                    self.set_edges_from_pieces(&pieces, &cell_to_piece_simple);
-
-                    if self.validate(&pieces) {
-                        self.save_solution(pieces);
-                    }
-                    self.restore(snap);
-                    self.solution_count < 2
-                });
+            self.set_edges_from_pieces(&pieces, cell_to_piece);
+            if self.validate(&pieces) {
+                self.save_solution(pieces);
             }
-        }
+            self.restore(snap);
+            self.solution_count < 2
+        });
     }
 }

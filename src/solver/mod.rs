@@ -355,58 +355,7 @@ impl Solver {
         }
         self.propagate_palisade();
 
-        // Watchtower !(value=1) replacement on 4-cell vertices:
-        // Every cell must belong to a piece, so value=1 always means 0 cut edges.
-        // Force all 4 surrounding edges to Uncut and remove the clue.
-        // (For border vertices with fewer cells, keep the clue for proper propagation.)
-        {
-            let cell_pair_indices: [(usize, usize); 4] = [(0, 1), (0, 2), (1, 3), (2, 3)];
-            let mut remove_indices = Vec::new();
-            let mut edges_to_uncut: Vec<EdgeId> = Vec::new();
-            for (idx, clue) in self.puzzle.vertex_clues.iter().enumerate() {
-                if clue.value != 1 {
-                    continue;
-                }
-                let (vi, vj) = self.grid.vertex_pos(clue.vertex);
-                let cell_opts = self.grid.vertex_cells(vi, vj);
-                let n = cell_opts
-                    .iter()
-                    .copied()
-                    .flatten()
-                    .filter(|&cid| self.grid.cell_exists[cid])
-                    .count();
-                if n == 4 {
-                    for &(a_idx, b_idx) in &cell_pair_indices {
-                        if let (Some(a), Some(b)) = (cell_opts[a_idx], cell_opts[b_idx]) {
-                            if self.grid.cell_exists[a] && self.grid.cell_exists[b] {
-                                if let Some(eid) = self.grid.edge_between(a, b) {
-                                    edges_to_uncut.push(eid);
-                                }
-                            }
-                        }
-                    }
-                    remove_indices.push(idx);
-                }
-            }
-            for eid in edges_to_uncut {
-                if self.edges[eid] == EdgeState::Unknown {
-                    let _ = self.set_edge(eid, EdgeState::Uncut);
-                }
-            }
-            // Remove replaced clues (in reverse order to preserve indices)
-            for &idx in remove_indices.iter().rev() {
-                self.puzzle.vertex_clues.remove(idx);
-            }
-            if !remove_indices.is_empty() {
-                // Rebuild watchtower_vertices set
-                self.watchtower_vertices = self
-                    .puzzle
-                    .vertex_clues
-                    .iter()
-                    .map(|cl| cl.vertex)
-                    .collect();
-            }
-        }
+        self.apply_watchtower_value_one_optimization();
 
         // Initialize pair layer for rose puzzles
         if self.rose_bits_all != 0 {
@@ -445,7 +394,81 @@ impl Solver {
             }
         }
 
-        // Debug: count edges after propagation
+        self.log_propagation_state();
+
+        // Count remaining unknown edges for progress display
+        self.total_unknown = self.curr_unknown;
+
+        // For precision puzzles without explicit shape bank, auto-populate
+        // with all free polyominoes of the required size (much faster piece-based search)
+        self.auto_populate_shape_bank();
+
+        if self.puzzle.rules.match_all {
+            self.solve_match();
+        } else {
+            self.solve_normal();
+        }
+
+        // Clear the progress line
+        progress::Progress::clear_line();
+
+        self.solution_count
+    }
+
+    /// Watchtower !(value=1) replacement on 4-cell vertices:
+    /// Every cell must belong to a piece, so value=1 always means 0 cut edges.
+    /// Force all 4 surrounding edges to Uncut and remove the clue.
+    /// (For border vertices with fewer cells, keep the clue for proper propagation.)
+    fn apply_watchtower_value_one_optimization(&mut self) {
+        let cell_pair_indices: [(usize, usize); 4] = [(0, 1), (0, 2), (1, 3), (2, 3)];
+        let mut remove_indices = Vec::new();
+        let mut edges_to_uncut: Vec<EdgeId> = Vec::new();
+        for (idx, clue) in self.puzzle.vertex_clues.iter().enumerate() {
+            if clue.value != 1 {
+                continue;
+            }
+            let (vi, vj) = self.grid.vertex_pos(clue.vertex);
+            let cell_opts = self.grid.vertex_cells(vi, vj);
+            let n = cell_opts
+                .iter()
+                .copied()
+                .flatten()
+                .filter(|&cid| self.grid.cell_exists[cid])
+                .count();
+            if n == 4 {
+                for &(a_idx, b_idx) in &cell_pair_indices {
+                    if let (Some(a), Some(b)) = (cell_opts[a_idx], cell_opts[b_idx]) {
+                        if self.grid.cell_exists[a] && self.grid.cell_exists[b] {
+                            if let Some(eid) = self.grid.edge_between(a, b) {
+                                edges_to_uncut.push(eid);
+                            }
+                        }
+                    }
+                }
+                remove_indices.push(idx);
+            }
+        }
+        for eid in edges_to_uncut {
+            if self.edges[eid] == EdgeState::Unknown {
+                let _ = self.set_edge(eid, EdgeState::Uncut);
+            }
+        }
+        // Remove replaced clues (in reverse order to preserve indices)
+        for &idx in remove_indices.iter().rev() {
+            self.puzzle.vertex_clues.remove(idx);
+        }
+        if !remove_indices.is_empty() {
+            // Rebuild watchtower_vertices set
+            self.watchtower_vertices = self
+                .puzzle
+                .vertex_clues
+                .iter()
+                .map(|cl| cl.vertex)
+                .collect();
+        }
+    }
+
+    fn log_propagation_state(&self) {
         let n_cut = self.edges.iter().filter(|&&e| e == EdgeState::Cut).count();
         let n_uncut = self
             .edges
@@ -465,54 +488,29 @@ impl Solver {
             n_cut + n_uncut + n_unknown
         );
 
-        // Dump shape bank
         eprintln!("shape bank: {} shapes", self.puzzle.rules.shape_bank.len());
         for (i, s) in self.puzzle.rules.shape_bank.iter().enumerate() {
             eprintln!("  shape {}: {} cells", i, s.cells.len());
         }
 
-        // Dump grid structure
         eprintln!("grid: rows={}, cols={}", self.grid.rows, self.grid.cols);
         for r in 0..self.grid.rows {
             let mut row_str = String::new();
             for c in 0..self.grid.cols {
                 let cid = self.grid.cell_id(r, c);
                 if self.grid.cell_exists[cid] {
-                    // Check for rose clue
                     let rose = self
                         .puzzle
                         .cell_clues
                         .iter()
                         .find(|cl| matches!(cl, CellClue::Rose { cell, .. } if *cell == cid));
-                    if rose.is_some() {
-                        row_str.push('A');
-                    } else {
-                        row_str.push('_');
-                    }
+                    row_str.push(if rose.is_some() { 'A' } else { '_' });
                 } else {
                     row_str.push(' ');
                 }
             }
             eprintln!("  row {}: {}", r, row_str);
         }
-
-        // Count remaining unknown edges for progress display
-        self.total_unknown = self.curr_unknown;
-
-        // For precision puzzles without explicit shape bank, auto-populate
-        // with all free polyominoes of the required size (much faster piece-based search)
-        self.auto_populate_shape_bank();
-
-        if self.puzzle.rules.match_all {
-            self.solve_match();
-        } else {
-            self.solve_normal();
-        }
-
-        // Clear the progress line
-        progress::Progress::clear_line();
-
-        self.solution_count
     }
 
     fn report_progress(&mut self) {
