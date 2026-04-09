@@ -1,6 +1,6 @@
 use super::Solver;
 use crate::types::*;
-use crate::uf::{uf_find, uf_union};
+use crate::uf::ParityUF;
 use std::collections::HashSet;
 
 impl Solver {
@@ -293,9 +293,7 @@ impl Solver {
         }
 
         // Build edge-level parity UF
-        let mut parent: Vec<usize> = (0..ne).collect();
-        let mut rank: Vec<u8> = vec![0; ne];
-        let mut par: Vec<u8> = vec![0; ne];
+        let mut uf = ParityUF::new(ne);
 
         // ev: 0=Uncut, 1=Cut, 2=Unknown
         let mut ev: Vec<u8> = self
@@ -340,7 +338,7 @@ impl Solver {
                     ));
                 }
                 2 => {
-                    uf_union(&mut parent, &mut rank, &mut par, unks[0], unks[1], kx ^ parity)?;
+                    uf.union(unks[0], unks[1], kx ^ parity)?;
                 }
                 _ => {}
             }
@@ -365,8 +363,8 @@ impl Solver {
             let target = kx ^ parity;
             'outer: for i in 0..unks.len() {
                 for j in (i + 1)..unks.len() {
-                    let (r1, p1) = uf_find(&parent, &par, unks[i]);
-                    let (r2, p2) = uf_find(&parent, &par, unks[j]);
+                    let (r1, p1) = uf.find(unks[i]);
+                    let (r2, p2) = uf.find(unks[j]);
                     if r1 == r2 {
                         let xij = p1 ^ p2;
                         let rem: Vec<EdgeId> = unks
@@ -387,14 +385,7 @@ impl Solver {
                                 },
                             ));
                         } else if rem.len() == 2 {
-                            uf_union(
-                                &mut parent,
-                                &mut rank,
-                                &mut par,
-                                rem[0],
-                                rem[1],
-                                target ^ xij,
-                            )?;
+                            uf.union(rem[0], rem[1], target ^ xij)?;
                         }
                         break 'outer;
                     }
@@ -408,7 +399,7 @@ impl Solver {
             if ev[e] > 1 {
                 continue;
             }
-            let (root, p) = uf_find(&parent, &par, e);
+            let (root, p) = uf.find(e);
             let r = p ^ ev[e];
             if let Some(ex) = rv[root] {
                 if ex != r {
@@ -422,7 +413,7 @@ impl Solver {
             if ev[e] <= 1 {
                 continue;
             }
-            let (root, p) = uf_find(&parent, &par, e);
+            let (root, p) = uf.find(e);
             if let Some(r) = rv[root] {
                 let v = p ^ r;
                 ev[e] = v;
@@ -441,16 +432,7 @@ impl Solver {
             return Ok(false);
         }
 
-        let mut progress = false;
-        for (e, state) in &forced {
-            if self.edges[*e] == EdgeState::Unknown {
-                if !self.set_edge(*e, *state) {
-                    return Err(());
-                }
-                progress = true;
-            }
-        }
-        Ok(progress)
+        self.apply_forced_edges(&forced)
     }
 
     /// Iterative vertex-level watchtower config probing.

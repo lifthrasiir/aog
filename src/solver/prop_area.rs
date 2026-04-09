@@ -246,11 +246,7 @@ impl Solver {
         }
 
         // Apply same-area forced Uncuts (collected above to avoid stale component state)
-        for &e in &same_area_forced_uncuts {
-            if self.edges[e] == EdgeState::Unknown && !self.set_edge(e, EdgeState::Uncut) {
-                return Err(());
-            }
-        }
+        self.apply_forced_uncuts(&same_area_forced_uncuts)?;
 
         // === Rose window propagation ===
         if self.rose_bits_all != 0 {
@@ -406,14 +402,7 @@ impl Solver {
                     merge_conflict_cuts.push(e);
                 }
             }
-            for &e in &merge_conflict_cuts {
-                if self.edges[e] == EdgeState::Unknown {
-                    if !self.set_edge(e, EdgeState::Cut) {
-                        return Err(());
-                    }
-                    progress = true;
-                }
-            }
+            progress = self.apply_forced_cuts(&merge_conflict_cuts)? || progress;
 
             // Step 3: Forbidden size checks.
             // (a) If a growing component's target area is forbidden → contradiction.
@@ -460,14 +449,7 @@ impl Solver {
                     }
                 }
             }
-            for &e in &forced_uncuts {
-                if self.edges[e] == EdgeState::Unknown {
-                    if !self.set_edge(e, EdgeState::Uncut) {
-                        return Err(());
-                    }
-                    progress = true;
-                }
-            }
+            progress = self.apply_forced_uncuts(&forced_uncuts)? || progress;
 
             // Cache for edge selection heuristic (Proposal C)
             self.cached_sealed_neighbor_sizes = Some(sealed_neighbor_sizes);
@@ -1277,22 +1259,8 @@ impl Solver {
             } // end if !self.in_probing
         }
 
-        for &e in &compass_forced_cuts {
-            if self.edges[e] == EdgeState::Unknown {
-                if !self.set_edge(e, EdgeState::Cut) {
-                    return Err(());
-                }
-                progress = true;
-            }
-        }
-        for &e in &compass_forced_uncuts {
-            if self.edges[e] == EdgeState::Unknown {
-                if !self.set_edge(e, EdgeState::Uncut) {
-                    return Err(());
-                }
-                progress = true;
-            }
-        }
+        progress = self.apply_forced_cuts(&compass_forced_cuts)? || progress;
+        progress = self.apply_forced_uncuts(&compass_forced_uncuts)? || progress;
         Ok(progress)
     }
 
@@ -1390,14 +1358,7 @@ impl Solver {
             }
 
             // Apply non-boxy forced cuts
-            for &e in &non_boxy_forced_cuts {
-                if self.edges[e] == EdgeState::Unknown {
-                    if !self.set_edge(e, EdgeState::Cut) {
-                        return Err(());
-                    }
-                    progress = true;
-                }
-            }
+            progress = self.apply_forced_cuts(&non_boxy_forced_cuts)? || progress;
         }
         Ok(progress)
     }
@@ -1550,14 +1511,7 @@ impl Solver {
                 }
             }
         }
-        for &ge in &diff_forced_cuts {
-            if self.edges[ge] == EdgeState::Unknown {
-                if !self.set_edge(ge, EdgeState::Cut) {
-                    return Err(());
-                }
-                progress = true;
-            }
-        }
+        progress = self.apply_forced_cuts(&diff_forced_cuts)? || progress;
         Ok(progress)
     }
 

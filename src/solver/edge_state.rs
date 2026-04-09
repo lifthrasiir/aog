@@ -53,6 +53,77 @@ impl Solver {
         true
     }
 
+    pub(crate) fn apply_forced_cuts(&mut self, cuts: &[EdgeId]) -> Result<bool, ()> {
+        let mut progress = false;
+        for &e in cuts {
+            if self.edges[e] == EdgeState::Unknown {
+                if !self.set_edge(e, EdgeState::Cut) {
+                    return Err(());
+                }
+                progress = true;
+            }
+        }
+        Ok(progress)
+    }
+
+    pub(crate) fn apply_forced_uncuts(&mut self, uncuts: &[EdgeId]) -> Result<bool, ()> {
+        let mut progress = false;
+        for &e in uncuts {
+            if self.edges[e] == EdgeState::Unknown {
+                if !self.set_edge(e, EdgeState::Uncut) {
+                    return Err(());
+                }
+                progress = true;
+            }
+        }
+        Ok(progress)
+    }
+
+    pub(crate) fn apply_forced_edges(
+        &mut self,
+        forced: &[(EdgeId, EdgeState)],
+    ) -> Result<bool, ()> {
+        let mut progress = false;
+        for &(e, state) in forced {
+            if self.edges[e] == EdgeState::Unknown {
+                if !self.set_edge(e, state) {
+                    return Err(());
+                }
+                progress = true;
+            }
+        }
+        Ok(progress)
+    }
+
+    pub(crate) fn set_edges_from_pieces(
+        &mut self,
+        pieces: &[crate::types::Piece],
+        cell_to_piece: &[usize],
+    ) {
+        let grid = &self.grid;
+        // Collect edges to set first, then apply (avoids borrow conflict with set_edge).
+        let mut to_set: Vec<(EdgeId, EdgeState)> = Vec::new();
+        for piece in pieces {
+            for &cid in &piece.cells {
+                for eid in grid.cell_edges(cid).into_iter().flatten() {
+                    let (c1, c2) = grid.edge_cells(eid);
+                    let other = if c1 == cid { c2 } else { c1 };
+                    let state =
+                        if !grid.cell_exists[other] || cell_to_piece[other] != cell_to_piece[cid]
+                        {
+                            EdgeState::Cut
+                        } else {
+                            EdgeState::Uncut
+                        };
+                    to_set.push((eid, state));
+                }
+            }
+        }
+        for (eid, state) in to_set {
+            self.set_edge(eid, state);
+        }
+    }
+
     pub(crate) fn restore(&mut self, snap: Snapshot) {
         while self.changed.len() > snap.edges {
             let (e, old_state) = self.changed.pop().unwrap();

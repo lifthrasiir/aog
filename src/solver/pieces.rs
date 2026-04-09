@@ -293,7 +293,6 @@ impl Solver {
         }
 
         let mut dlx = Dlx::new(num_cells + num_clues);
-        let grid = self.grid.clone();
 
         if use_clue_mode {
             let placements = self.generate_clue_placements();
@@ -321,21 +320,7 @@ impl Solver {
                     .collect();
 
                 // Temporary set edges based on pieces for validation
-                for piece in &pieces {
-                    for &cid in &piece.cells {
-                        for eid in grid.cell_edges(cid).into_iter().flatten() {
-                            let (c1, c2) = grid.edge_cells(eid);
-                            let other = if c1 == cid { c2 } else { c1 };
-                            if !grid.cell_exists[other]
-                                || cell_to_piece[other] != cell_to_piece[cid]
-                            {
-                                self.set_edge(eid, EdgeState::Cut);
-                            } else {
-                                self.set_edge(eid, EdgeState::Uncut);
-                            }
-                        }
-                    }
-                }
+                self.set_edges_from_pieces(&pieces, &cell_to_piece);
 
                 if self.validate(&pieces) {
                     self.save_solution(pieces);
@@ -587,21 +572,7 @@ impl Solver {
                         .collect();
 
                     // Temporary set edges based on pieces for validation
-                    for piece in &pieces {
-                        for &cid in &piece.cells {
-                            for eid in grid.cell_edges(cid).into_iter().flatten() {
-                                let (c1, c2) = grid.edge_cells(eid);
-                                let other = if c1 == cid { c2 } else { c1 };
-                                if !grid.cell_exists[other]
-                                    || cell_to_piece_final[other] != cell_to_piece_final[cid]
-                                {
-                                    self.set_edge(eid, EdgeState::Cut);
-                                } else {
-                                    self.set_edge(eid, EdgeState::Uncut);
-                                }
-                            }
-                        }
-                    }
+                    self.set_edges_from_pieces(&pieces, &cell_to_piece_final);
 
                     if self.validate(&pieces) {
                         self.save_solution(pieces);
@@ -627,21 +598,7 @@ impl Solver {
                         .collect();
 
                     // Temporary set edges based on pieces for validation
-                    for piece in &pieces {
-                        for &cid in &piece.cells {
-                            for eid in grid.cell_edges(cid).into_iter().flatten() {
-                                let (c1, c2) = grid.edge_cells(eid);
-                                let other = if c1 == cid { c2 } else { c1 };
-                                if !grid.cell_exists[other]
-                                    || cell_to_piece_simple[other] != cell_to_piece_simple[cid]
-                                {
-                                    self.set_edge(eid, EdgeState::Cut);
-                                } else {
-                                    self.set_edge(eid, EdgeState::Uncut);
-                                }
-                            }
-                        }
-                    }
+                    self.set_edges_from_pieces(&pieces, &cell_to_piece_simple);
 
                     if self.validate(&pieces) {
                         self.save_solution(pieces);

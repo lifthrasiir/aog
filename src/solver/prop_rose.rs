@@ -1,62 +1,18 @@
 use super::Solver;
 use crate::types::*;
-use crate::uf::{uf_find, uf_union};
+use crate::uf::ParityUF;
 
 impl Solver {
     /// BFS from component ci through Uncut+Unknown edges, collect reachable rose types.
     /// If `exclude_rose_mask` is nonzero, cells containing those rose symbols are
     /// treated as blocked (not entered during BFS). This gives tighter reachability
     /// estimates because same-type cells must be in different pieces.
-    fn bfs_reachable_rose_types(&mut self, ci: usize, exclude_rose_mask: u8) -> u8 {
-        let n = self.grid.num_cells();
-        self.rose_visited[..n].fill(false);
-        let mut types: u8 = 0;
-        let sym = &self.cell_rose_sym;
-
-        self.q_buf.clear();
-        for &c in &self.comp_cells[ci] {
-            self.rose_visited[c] = true;
-            self.q_buf.push(c);
-            if sym[c] != u8::MAX {
-                types |= 1 << sym[c];
-            }
-        }
-
-        while let Some(cur) = self.q_buf.pop() {
-            for eid in self.grid.cell_edges(cur).into_iter().flatten() {
-                if self.edges[eid] == EdgeState::Cut {
-                    continue;
-                }
-                let (a, b) = self.grid.edge_cells(eid);
-                let other = if a == cur { b } else { a };
-                if !self.grid.cell_exists[other] || self.rose_visited[other] {
-                    continue;
-                }
-                if exclude_rose_mask != 0
-                    && sym[other] != u8::MAX
-                    && (exclude_rose_mask & (1 << sym[other])) != 0
-                {
-                    continue;
-                }
-                self.rose_visited[other] = true;
-                self.q_buf.push(other);
-                if sym[other] != u8::MAX {
-                    types |= 1 << sym[other];
-                }
-            }
-        }
-
-        types
-    }
-
-    /// BFS from component ci through Uncut+Unknown edges, excluding a specific
-    /// edge `exclude_e` AND cells whose rose symbol is in `exclude_rose_mask`.
-    /// Returns the bitmask of reachable rose types.
-    fn bfs_reachable_excluding_edge(
+    /// If `exclude_e` is Some, that edge is also treated as blocked.
+    fn bfs_reachable_rose_types(
         &mut self,
         ci: usize,
         exclude_rose_mask: u8,
-        exclude_e: EdgeId,
+        exclude_e: Option<EdgeId>,
     ) -> u8 {
         let n = self.grid.num_cells();
         self.rose_visited[..n].fill(false);
@@ -74,7 +30,12 @@ impl Solver {
 
         while let Some(cur) = self.q_buf.pop() {
             for eid in self.grid.cell_edges(cur).into_iter().flatten() {
-                if eid == exclude_e || self.edges[eid] == EdgeState::Cut {
+                if let Some(ex) = exclude_e {
+                    if eid == ex {
+                        continue;
+                    }
+                }
+                if self.edges[eid] == EdgeState::Cut {
                     continue;
                 }
                 let (a, b) = self.grid.edge_cells(eid);
@@ -169,7 +130,8 @@ impl Solver {
             }
 
             for e in unknown_edges {
-                let reachable_without = self.bfs_reachable_excluding_edge(ci, comp_rose, e);
+                let reachable_without =
+                    self.bfs_reachable_rose_types(ci, comp_rose, Some(e));
                 if (reachable_without & missing) != missing {
                     if !self.set_edge(e, EdgeState::Uncut) {
                         return Err(());
@@ -195,7 +157,7 @@ impl Solver {
             // Only run BFS for components missing exactly 1 type (most likely to fail,
             // and single BFS is cheap). Skip 2+ missing types (well-connected, unlikely to fail).
             if missing.count_ones() == 1 {
-                let reachable = self.bfs_reachable_rose_types(ci, comp_rose);
+                let reachable = self.bfs_reachable_rose_types(ci, comp_rose, None);
                 if (reachable & missing) != missing {
                     return Err(());
                 }
@@ -298,9 +260,7 @@ impl Solver {
         let ne = self.grid.num_edges();
         let two_piece = self.rose_exact_piece_count == Some(2);
 
-        let mut parent: Vec<usize> = (0..n).collect();
-        let mut rank: Vec<u8> = vec![0; n];
-        let mut par: Vec<u8> = vec![0; n];
+        let mut uf = ParityUF::new(n);
 
         // Seed: rose cells of same type → different pieces (parity=1)
         // Only valid when there are exactly 2 cells per type (bipartite UF
@@ -309,7 +269,7 @@ impl Solver {
         if let Some(pl) = &self.pair_layer {
             for type_cells in pl.rose_by_type() {
                 if type_cells.len() == 2 {
-                    if uf_union(&mut parent, &mut rank, &mut par, type_cells[0], type_cells[1], 1).is_err() {
+                    if uf.union(type_cells[0], type_cells[1], 1).is_err() {
                         return Err(());
                     }
                 }
@@ -318,14 +278,14 @@ impl Solver {
 
         // manual_sames → parity=0: always valid (asserting same piece definitively)
         for &(c1, c2) in &self.manual_sames {
-            if uf_union(&mut parent, &mut rank, &mut par, c1, c2, 0).is_err() {
+            if uf.union(c1, c2, 0).is_err() {
                 return Err(());
             }
         }
         // manual_diffs → parity=1: only safe for 2-piece puzzles (same bipartite limitation)
         if two_piece {
             for &(c1, c2) in &self.manual_diffs {
-                if uf_union(&mut parent, &mut rank, &mut par, c1, c2, 1).is_err() {
+                if uf.union(c1, c2, 1).is_err() {
                     return Err(());
                 }
             }
@@ -346,7 +306,7 @@ impl Solver {
             if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
                 continue;
             }
-            if uf_union(&mut parent, &mut rank, &mut par, c1, c2, rel).is_err() {
+            if uf.union(c1, c2, rel).is_err() {
                 return Err(());
             }
         }
@@ -360,8 +320,8 @@ impl Solver {
             if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
                 continue;
             }
-            let (r1, p1) = uf_find(&parent, &par, c1);
-            let (r2, p2) = uf_find(&parent, &par, c2);
+            let (r1, p1) = uf.find(c1);
+            let (r2, p2) = uf.find(c2);
             if r1 == r2 && (p1 ^ p2) == 1 {
                 // Must be in different pieces → this edge must be Cut
                 if !self.set_edge(e, EdgeState::Cut) {

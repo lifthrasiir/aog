@@ -44,3 +44,30 @@ pub fn uf_union(
     }
     Ok(true)
 }
+
+/// Owning wrapper around the parity union-find arrays.
+pub struct ParityUF {
+    parent: Vec<usize>,
+    rank: Vec<u8>,
+    par: Vec<u8>,
+}
+
+impl ParityUF {
+    pub fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+            rank: vec![0; n],
+            par: vec![0; n],
+        }
+    }
+
+    pub fn find(&self, x: usize) -> (usize, u8) {
+        uf_find(&self.parent, &self.par, x)
+    }
+
+    /// Union c1 and c2 with parity rel (0=same, 1=different).
+    /// Returns Ok(true) if newly merged, Ok(false) if already consistent, Err if contradiction.
+    pub fn union(&mut self, c1: usize, c2: usize, rel: u8) -> Result<bool, ()> {
+        uf_union(&mut self.parent, &mut self.rank, &mut self.par, c1, c2, rel)
+    }
+}
