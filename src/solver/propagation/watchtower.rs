@@ -13,6 +13,9 @@ impl Solver {
     ///
     /// value=v constrains the required number of cut edges accordingly.
     pub(crate) fn propagate_watchtower(&mut self) -> Result<bool, ()> {
+        if self.puzzle.vertex_clues.is_empty() {
+            return Ok(false);
+        }
         let mut progress = false;
         // Adjacent cell pairs in the 2×2 layout: (TL,TR), (TL,BL), (TR,BR), (BL,BR)
         let cell_pair_indices: [(usize, usize); 4] = [(0, 1), (0, 2), (1, 3), (2, 3)];

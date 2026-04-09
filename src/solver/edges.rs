@@ -87,25 +87,14 @@ impl Solver {
                         compass_count[ci] += 1;
                         // Check if any direction is at its compass limit
                         let (cr, cc) = self.grid.cell_pos(*cell);
-                        let (cr_i, cc_i) = (cr as isize, cc as isize);
-                        let counts: [usize; 4] = [
-                            self.comp_cells[ci]
-                                .iter()
-                                .filter(|&&c| (self.grid.cell_pos(c).0 as isize) < cr_i)
-                                .count(),
-                            self.comp_cells[ci]
-                                .iter()
-                                .filter(|&&c| (self.grid.cell_pos(c).0 as isize) > cr_i)
-                                .count(),
-                            self.comp_cells[ci]
-                                .iter()
-                                .filter(|&&c| (self.grid.cell_pos(c).1 as isize) > cc_i)
-                                .count(),
-                            self.comp_cells[ci]
-                                .iter()
-                                .filter(|&&c| (self.grid.cell_pos(c).1 as isize) < cc_i)
-                                .count(),
-                        ];
+                        let mut counts = [0usize; 4]; // N, S, E, W
+                        for &c in &self.comp_cells[ci] {
+                            let (pr, pc) = self.grid.cell_pos(c);
+                            if pr < cr { counts[0] += 1; }
+                            if pr > cr { counts[1] += 1; }
+                            if pc > cc { counts[2] += 1; }
+                            if pc < cc { counts[3] += 1; }
+                        }
                         for &(val, cnt) in &[
                             (compass.n, counts[0]),
                             (compass.s, counts[1]),

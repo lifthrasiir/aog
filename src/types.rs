@@ -24,7 +24,7 @@ pub struct Piece {
     pub canonical: Shape,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct CompassData {
     pub e: Option<usize>,
     pub w: Option<usize>,

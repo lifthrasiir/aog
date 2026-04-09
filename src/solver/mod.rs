@@ -347,6 +347,24 @@ impl Solver {
             }
         }
 
+        // Pre-compute compass clue indices for fast iteration during propagation.
+        if self.has_compass_clue {
+            self.prop.compass_clue_indices = self
+                .puzzle
+                .cell_clues
+                .iter()
+                .enumerate()
+                .filter_map(|(i, cl)| {
+                    if let CellClue::Compass { cell, .. } = cl {
+                        if self.grid.cell_exists[*cell] {
+                            return Some(i);
+                        }
+                    }
+                    None
+                })
+                .collect();
+        }
+
         // Pre-search compass incompatibility: detect incompatible compass pairs
         // and force edge cuts or add diffs before search begins.
         if self.has_compass_clue {

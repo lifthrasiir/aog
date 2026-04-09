@@ -172,7 +172,7 @@ impl Solver {
 
     // --- Phase 3: All-types complete component rose blocking ---
     pub(crate) fn propagate_rose_phase3(&mut self) -> Result<bool, ()> {
-        if self.curr_comp_id.is_empty() {
+        if self.rose_bits_all == 0 || self.curr_comp_id.is_empty() {
             return Ok(false);
         }
         let num_comp = self.curr_comp_sz.len();

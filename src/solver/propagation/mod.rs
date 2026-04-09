@@ -31,6 +31,10 @@ pub(crate) struct PropagationState {
     pub(crate) growth_edges: Vec<Vec<EdgeId>>,
     /// Number of clue cells per component (populated by build_components, solitude only).
     pub(crate) comp_clue_cells: Vec<usize>,
+    /// Rose symbol bitmask per component (reusable buffer, populated by build_components).
+    pub(crate) comp_rose: Vec<u8>,
+    /// Pre-computed indices into puzzle.cell_clues for compass clues with existing cells.
+    pub(crate) compass_clue_indices: Vec<usize>,
     /// Reusable BFS buffer for component traversal.
     pub(crate) comp_buf: Vec<usize>,
     /// Secondary reusable BFS buffer (ID mapping etc.).
@@ -54,6 +58,8 @@ impl PropagationState {
             curr_max_area: Vec::new(),
             growth_edges: Vec::new(),
             comp_clue_cells: Vec::new(),
+            comp_rose: Vec::new(),
+            compass_clue_indices: Vec::new(),
             comp_buf: vec![usize::MAX; nc],
             comp_buf2: Vec::new(),
         }
