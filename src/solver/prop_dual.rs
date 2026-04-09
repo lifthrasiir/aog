@@ -50,10 +50,7 @@ impl Solver {
         let mut progress = false;
 
         // ── Check 1: single growth edge forcing ──
-        for ci in 0..num_comp {
-            if !self.can_grow_buf[ci] {
-                continue;
-            }
+        for ci in self.growing(num_comp).collect::<Vec<_>>() {
             let must_grow = if let Some(t) = self.curr_target_area[ci] {
                 self.curr_comp_sz[ci] < t
             } else {

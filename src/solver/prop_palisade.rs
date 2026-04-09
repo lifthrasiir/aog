@@ -1,10 +1,10 @@
-use super::Solver;
+use super::{EdgeForcer, Solver};
 use crate::polyomino::Rotation;
 use crate::types::*;
 
 impl Solver {
     pub(crate) fn propagate_palisade(&mut self) {
-        let mut to_set: Vec<(EdgeId, EdgeState)> = Vec::new();
+        let mut ef = EdgeForcer::new();
         for clue in &self.puzzle.cell_clues {
             let CellClue::Palisade { cell, kind } = clue else {
                 continue;
@@ -21,21 +21,19 @@ impl Solver {
                 };
                 for eid in self.grid.cell_edges(*cell).into_iter().flatten() {
                     if self.edges[eid] == EdgeState::Unknown {
-                        to_set.push((eid, state));
+                        ef.force(eid, state);
                     }
                 }
             }
         }
-        for (eid, state) in to_set {
-            let _ = self.set_edge(eid, state);
-        }
+        let _ = ef.apply(self);
     }
 
     /// Full palisade propagation: enumerate compatible rotations and force edges
     /// where all compatible rotations agree on the state.
     pub(crate) fn propagate_palisade_constraints(&mut self) -> Result<bool, ()> {
         // First pass: collect all deductions
-        let mut all_forced: Vec<(EdgeId, EdgeState)> = Vec::new();
+        let mut ef = EdgeForcer::new();
         let mut contradiction = false;
 
         for clue in &self.puzzle.cell_clues {
@@ -116,9 +114,9 @@ impl Solver {
                     None => continue,
                 };
                 if can_be_cut[k] && !can_be_uncut[k] {
-                    all_forced.push((eid, EdgeState::Cut));
+                    ef.force_cut(eid);
                 } else if !can_be_cut[k] && can_be_uncut[k] {
-                    all_forced.push((eid, EdgeState::Uncut));
+                    ef.force_uncut(eid);
                 }
             }
         }
@@ -128,13 +126,11 @@ impl Solver {
         }
 
         // Second pass: apply deductions
-        let mut progress = false;
-        for (eid, state) in all_forced {
-            if !self.set_edge(eid, state) {
-                return Err(());
-            }
-            progress = true;
-        }
+        let progress = if ef.is_empty() {
+            false
+        } else {
+            ef.apply(self)?
+        };
 
         Ok(progress)
     }

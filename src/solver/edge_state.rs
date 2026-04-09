@@ -1,6 +1,48 @@
 use super::{Snapshot, Solver};
 use crate::types::*;
 
+/// Collects forced edge assignments (cut/uncut) and applies them in batch.
+/// Replaces the repeated pattern of local `Vec<EdgeId>` / `Vec<(EdgeId, EdgeState)>`
+/// creation, population, and manual apply loops.
+pub(crate) struct EdgeForcer {
+    edges: Vec<(EdgeId, EdgeState)>,
+}
+
+impl EdgeForcer {
+    pub(crate) fn new() -> Self {
+        Self { edges: Vec::new() }
+    }
+
+    pub(crate) fn force_cut(&mut self, e: EdgeId) {
+        self.edges.push((e, EdgeState::Cut));
+    }
+
+    pub(crate) fn force_uncut(&mut self, e: EdgeId) {
+        self.edges.push((e, EdgeState::Uncut));
+    }
+
+    pub(crate) fn force(&mut self, e: EdgeId, s: EdgeState) {
+        self.edges.push((e, s));
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.edges.is_empty()
+    }
+
+    #[expect(unused)]
+    pub(crate) fn has_cuts(&self) -> bool {
+        self.edges.iter().any(|&(_, s)| s == EdgeState::Cut)
+    }
+
+    /// Apply all collected forced edges to the solver, then clear the buffer.
+    /// Returns Ok(progress) or Err(()) on contradiction.
+    pub(crate) fn apply(&mut self, solver: &mut Solver) -> Result<bool, ()> {
+        let progress = solver.apply_forced_edges(&self.edges)?;
+        self.edges.clear();
+        Ok(progress)
+    }
+}
+
 impl Solver {
     pub(crate) fn set_edge(&mut self, e: EdgeId, s: EdgeState) -> bool {
         if self.edges[e] == s {
@@ -53,32 +95,6 @@ impl Solver {
         true
     }
 
-    pub(crate) fn apply_forced_cuts(&mut self, cuts: &[EdgeId]) -> Result<bool, ()> {
-        let mut progress = false;
-        for &e in cuts {
-            if self.edges[e] == EdgeState::Unknown {
-                if !self.set_edge(e, EdgeState::Cut) {
-                    return Err(());
-                }
-                progress = true;
-            }
-        }
-        Ok(progress)
-    }
-
-    pub(crate) fn apply_forced_uncuts(&mut self, uncuts: &[EdgeId]) -> Result<bool, ()> {
-        let mut progress = false;
-        for &e in uncuts {
-            if self.edges[e] == EdgeState::Unknown {
-                if !self.set_edge(e, EdgeState::Uncut) {
-                    return Err(());
-                }
-                progress = true;
-            }
-        }
-        Ok(progress)
-    }
-
     pub(crate) fn apply_forced_edges(
         &mut self,
         forced: &[(EdgeId, EdgeState)],
@@ -109,8 +125,7 @@ impl Solver {
                     let (c1, c2) = grid.edge_cells(eid);
                     let other = if c1 == cid { c2 } else { c1 };
                     let state =
-                        if !grid.cell_exists[other] || cell_to_piece[other] != cell_to_piece[cid]
-                        {
+                        if !grid.cell_exists[other] || cell_to_piece[other] != cell_to_piece[cid] {
                             EdgeState::Cut
                         } else {
                             EdgeState::Uncut
@@ -138,6 +153,37 @@ impl Solver {
         self.manual_sames.truncate(snap.manual_sames);
         self.manual_same_set
             .retain(|pair| self.manual_sames.iter().any(|d| *d == *pair));
+    }
+
+    /// Run `setup` to modify edge state. If setup returns true, propagate.
+    /// Always restores state afterward. Returns true if setup succeeded AND propagation succeeded.
+    ///
+    /// This encapsulates the repeated `snapshot → set edges → propagate → restore` pattern.
+    pub(crate) fn probe(&mut self, setup: impl FnOnce(&mut Self) -> bool) -> bool {
+        let snap = self.snapshot();
+        let ok = setup(self) && self.propagate().is_ok();
+        self.restore(snap);
+        ok
+    }
+
+    // Component sealed/growing helpers (reads can_grow_buf directly)
+
+    #[inline]
+    pub(crate) fn is_sealed(&self, ci: usize) -> bool {
+        ci < self.can_grow_buf.len() && !self.can_grow_buf[ci]
+    }
+
+    #[inline]
+    pub(crate) fn is_growing(&self, ci: usize) -> bool {
+        ci < self.can_grow_buf.len() && self.can_grow_buf[ci]
+    }
+
+    pub(crate) fn sealed(&self, num_comp: usize) -> impl Iterator<Item = usize> + '_ {
+        (0..num_comp).filter(|&ci| self.is_sealed(ci))
+    }
+
+    pub(crate) fn growing(&self, num_comp: usize) -> impl Iterator<Item = usize> + '_ {
+        (0..num_comp).filter(|&ci| self.is_growing(ci))
     }
 }
 

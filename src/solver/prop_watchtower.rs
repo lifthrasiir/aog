@@ -1,4 +1,4 @@
-use super::Solver;
+use super::{EdgeForcer, Solver};
 use crate::types::*;
 use crate::uf::ParityUF;
 use std::collections::HashSet;
@@ -47,7 +47,7 @@ impl Solver {
                         cells.iter().map(|&c| self.curr_comp_id[c]).collect();
                     let num_sealed = comp_set
                         .iter()
-                        .filter(|&&ci| !self.can_grow_buf[ci])
+                        .filter(|&&ci| self.is_sealed(ci))
                         .count();
                     let num_growing = comp_set.len() - num_sealed;
 
@@ -306,7 +306,7 @@ impl Solver {
             })
             .collect();
 
-        let mut forced: Vec<(EdgeId, EdgeState)> = Vec::new();
+        let mut ef = EdgeForcer::new();
 
         // Phase 1: Build UF from pairwise constraints (0, 1, or 2 unknowns)
         for (edge_ids, parity) in &constraints {
@@ -328,14 +328,14 @@ impl Solver {
                 1 => {
                     let v = kx ^ parity;
                     ev[unks[0]] = v;
-                    forced.push((
+                    ef.force(
                         unks[0],
                         if v == 1 {
                             EdgeState::Cut
                         } else {
                             EdgeState::Uncut
                         },
-                    ));
+                    );
                 }
                 2 => {
                     uf.union(unks[0], unks[1], kx ^ parity)?;
@@ -376,14 +376,14 @@ impl Solver {
                         if rem.len() == 1 {
                             let v = target ^ xij;
                             ev[rem[0]] = v;
-                            forced.push((
+                            ef.force(
                                 rem[0],
                                 if v == 1 {
                                     EdgeState::Cut
                                 } else {
                                     EdgeState::Uncut
                                 },
-                            ));
+                            );
                         } else if rem.len() == 2 {
                             uf.union(rem[0], rem[1], target ^ xij)?;
                         }
@@ -417,22 +417,22 @@ impl Solver {
             if let Some(r) = rv[root] {
                 let v = p ^ r;
                 ev[e] = v;
-                forced.push((
+                ef.force(
                     e,
                     if v == 1 {
                         EdgeState::Cut
                     } else {
                         EdgeState::Uncut
                     },
-                ));
+                );
             }
         }
 
-        if forced.is_empty() {
+        if ef.is_empty() {
             return Ok(false);
         }
 
-        self.apply_forced_edges(&forced)
+        ef.apply(self)
     }
 
     /// Iterative vertex-level watchtower config probing.
@@ -576,23 +576,19 @@ impl Solver {
                             if mask.count_ones() as usize != remaining {
                                 continue;
                             }
-                            let snap = self.snapshot();
-                            let mut ok = true;
-                            for (bit, &idx) in unk_indices.iter().enumerate() {
-                                let val = if (mask >> bit) & 1 == 1 {
-                                    EdgeState::Cut
-                                } else {
-                                    EdgeState::Uncut
-                                };
-                                if !self.set_edge(edge_ids[idx], val) {
-                                    ok = false;
-                                    break;
+                            let ok = self.probe(|s| {
+                                for (bit, &idx) in unk_indices.iter().enumerate() {
+                                    let val = if (mask >> bit) & 1 == 1 {
+                                        EdgeState::Cut
+                                    } else {
+                                        EdgeState::Uncut
+                                    };
+                                    if !s.set_edge(edge_ids[idx], val) {
+                                        return false;
+                                    }
                                 }
-                            }
-                            if ok {
-                                ok = self.propagate().is_ok();
-                            }
-                            self.restore(snap);
+                                true
+                            });
                             if ok {
                                 total_surviving += 1;
                                 for (bit, _) in unk_indices.iter().enumerate() {

@@ -161,7 +161,7 @@ impl Solver {
                             return None;
                         }
                         let ci = self.curr_comp_id[*cell];
-                        if ci < num_comp && self.can_grow_buf[ci] {
+                        if self.is_growing(ci) {
                             return Some((*cell, compass.clone()));
                         }
                     }
@@ -216,7 +216,7 @@ impl Solver {
                 if cur_ci != ci_compass && cur_ci < num_comp && !seen_comps[cur_ci] {
                     seen_comps[cur_ci] = true;
 
-                    if self.can_grow_buf[cur_ci] {
+                    if self.is_growing(cur_ci) {
                         let target_cell = self.comp_cells[cur_ci][0];
                         if self.is_diff_inline(compass_cell, target_cell) {
                             continue;

@@ -21,11 +21,9 @@ impl Solver {
             .any(|cl| matches!(cl.kind, EdgeClueKind::Delta));
 
         if has_mingle || has_gemini || has_mismatch || has_delta {
+            let sealed: Vec<usize> = self.sealed(num_comp).collect();
             let mut comp_shape: Vec<Option<Shape>> = vec![None; num_comp];
-            for ci in 0..num_comp {
-                if self.can_grow_buf[ci] {
-                    continue;
-                }
+            for ci in sealed {
                 let at_limit = match self.curr_target_area[ci] {
                     Some(t) => self.curr_comp_sz[ci] == t,
                     None => true,
@@ -68,8 +66,8 @@ impl Solver {
                     }
 
                     // One side sealed: propagate size constraint to the other
-                    let sealed1 = !self.can_grow_buf[ci1];
-                    let sealed2 = !self.can_grow_buf[ci2];
+                    let sealed1 = self.is_sealed(ci1);
+                    let sealed2 = self.is_sealed(ci2);
                     if sealed1 && sealed2 {
                         continue;
                     }
@@ -126,8 +124,8 @@ impl Solver {
                         continue;
                     }
 
-                    let sealed1 = !self.can_grow_buf[ci1];
-                    let sealed2 = !self.can_grow_buf[ci2];
+                    let sealed1 = self.is_sealed(ci1);
+                    let sealed2 = self.is_sealed(ci2);
 
                     // Both sealed: check canonical shapes match
                     if sealed1 && sealed2 {
@@ -209,10 +207,7 @@ impl Solver {
                 }
 
                 // Growing components: check if at least one shape of their target size is available
-                for ci in 0..num_comp {
-                    if !self.can_grow_buf[ci] {
-                        continue; // already sealed, handled above
-                    }
+                for ci in self.growing(num_comp).collect::<Vec<_>>() {
                     let Some(target) = self.curr_target_area[ci] else {
                         continue; // no fixed target area, skip
                     };

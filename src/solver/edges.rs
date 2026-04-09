@@ -145,8 +145,8 @@ impl Solver {
                 score += 10;
             }
 
-            let sealed1 = ci1 < self.can_grow_buf.len() && !self.can_grow_buf[ci1];
-            let sealed2 = ci2 < self.can_grow_buf.len() && !self.can_grow_buf[ci2];
+            let sealed1 = self.is_sealed(ci1);
+            let sealed2 = self.is_sealed(ci2);
 
             // General bonuses (apply regardless of size_separation)
 

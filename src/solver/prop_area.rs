@@ -1,4 +1,4 @@
-use super::Solver;
+use super::{EdgeForcer, Solver};
 use crate::types::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -184,7 +184,7 @@ impl Solver {
         while self.growth_edges.len() < num_comp {
             self.growth_edges.push(Vec::new());
         }
-        let mut same_area_forced_uncuts: Vec<EdgeId> = Vec::new();
+        let mut same_area_ef = EdgeForcer::new();
 
         for e in 0..self.grid.num_edges() {
             if self.edges[e] != EdgeState::Unknown {
@@ -221,7 +221,7 @@ impl Solver {
                         (self.curr_target_area[ci1], self.curr_target_area[ci2])
                     {
                         if a1 == a2 {
-                            same_area_forced_uncuts.push(e);
+                            same_area_ef.force_uncut(e);
                             self.can_grow_buf[ci1] = true;
                             self.can_grow_buf[ci2] = true;
                             continue;
@@ -246,7 +246,7 @@ impl Solver {
         }
 
         // Apply same-area forced Uncuts (collected above to avoid stale component state)
-        self.apply_forced_uncuts(&same_area_forced_uncuts)?;
+        same_area_ef.apply(self)?;
 
         // === Rose window propagation ===
         if self.rose_bits_all != 0 {
@@ -270,10 +270,7 @@ impl Solver {
             }
 
             // 2) Sealed component missing a rose symbol → contradiction
-            for ci in 0..num_comp {
-                if self.can_grow_buf[ci] {
-                    continue;
-                }
+            for ci in self.sealed(num_comp).collect::<Vec<_>>() {
                 let missing = self.rose_bits_all & !comp_rose[ci];
                 if missing != 0 {
                     return Err(());
@@ -281,7 +278,7 @@ impl Solver {
             }
 
             // 3) Growth edge forcing: collect forced Cut/Uncut edges
-            let mut rose_cut_set: HashSet<EdgeId> = HashSet::new();
+            let mut rose_cut_ef = EdgeForcer::new();
 
             for e in 0..self.grid.num_edges() {
                 if self.edges[e] != EdgeState::Unknown {
@@ -301,22 +298,18 @@ impl Solver {
                 // Check both: endpoint symbols and existing component symbols.
                 let would_dup = (comp_rose[ci1] & comp_rose[ci2]) != 0;
                 if would_dup {
-                    rose_cut_set.insert(e);
+                    rose_cut_ef.force_cut(e);
                 }
             }
 
-            for &e in &rose_cut_set {
-                if self.edges[e] == EdgeState::Unknown && !self.set_edge(e, EdgeState::Cut) {
-                    return Err(());
-                }
-            }
+            rose_cut_ef.apply(self)?;
         }
 
         // === Rose exact piece count cap ===
         // If we know there are exactly K pieces, and K components are already sealed,
         // all remaining inter-component edges must be Cut (no more pieces allowed).
         if let Some(k) = self.rose_exact_piece_count {
-            let sealed_count = (0..num_comp).filter(|&ci| !self.can_grow_buf[ci]).count();
+            let sealed_count = self.sealed(num_comp).count();
             if sealed_count > k {
                 return Err(());
             }
@@ -365,13 +358,13 @@ impl Solver {
                     continue;
                 }
                 // Sealed component: its current size is its final size
-                if !self.can_grow_buf[ci1] {
+                if self.is_sealed(ci1) {
                     sealed_neighbor_sizes[ci2].insert(self.curr_comp_sz[ci1]);
                 } else if let Some(t) = self.curr_target_area[ci1] {
                     // Growing with target: final size will be t
                     sealed_neighbor_sizes[ci2].insert(t);
                 }
-                if !self.can_grow_buf[ci2] {
+                if self.is_sealed(ci2) {
                     sealed_neighbor_sizes[ci1].insert(self.curr_comp_sz[ci2]);
                 } else if let Some(t) = self.curr_target_area[ci2] {
                     sealed_neighbor_sizes[ci1].insert(t);
@@ -381,7 +374,7 @@ impl Solver {
             // Step 2: For each Unknown growth edge, check if merging
             // the two adjacent components would create a size that conflicts with
             // any sealed neighbor of either component. If so, force Cut.
-            let mut merge_conflict_cuts: Vec<EdgeId> = Vec::new();
+            let mut merge_conflict_ef = EdgeForcer::new();
             for e in 0..self.grid.num_edges() {
                 if self.edges[e] != EdgeState::Unknown {
                     continue;
@@ -399,23 +392,23 @@ impl Solver {
                 if sealed_neighbor_sizes[ci1].contains(&merged_sz)
                     || sealed_neighbor_sizes[ci2].contains(&merged_sz)
                 {
-                    merge_conflict_cuts.push(e);
+                    merge_conflict_ef.force_cut(e);
                 }
             }
-            progress = self.apply_forced_cuts(&merge_conflict_cuts)? || progress;
+            progress = merge_conflict_ef.apply(self)? || progress;
 
             // Step 3: Forbidden size checks.
             // (a) If a growing component's target area is forbidden → contradiction.
             // (b) If a growing component's current size is forbidden and it has
             //     exactly 1 growth edge, force that edge Uncut.
-            let mut forced_uncuts: Vec<EdgeId> = Vec::new();
+            let mut forbidden_uncut_ef = EdgeForcer::new();
             for ci in 0..num_comp {
                 let forbidden = &sealed_neighbor_sizes[ci];
                 if forbidden.is_empty() {
                     continue;
                 }
 
-                if !self.can_grow_buf[ci] {
+                if self.is_sealed(ci) {
                     // Sealed component at forbidden size — already caught by the
                     // sealed-vs-sealed check below, but let's be explicit:
                     if forbidden.contains(&self.curr_comp_sz[ci]) {
@@ -444,12 +437,12 @@ impl Solver {
                             return Err(());
                         }
                         if unk_count == 1 {
-                            forced_uncuts.push(last_unk.unwrap());
+                            forbidden_uncut_ef.force_uncut(last_unk.unwrap());
                         }
                     }
                 }
             }
-            progress = self.apply_forced_uncuts(&forced_uncuts)? || progress;
+            progress = forbidden_uncut_ef.apply(self)? || progress;
 
             // Cache for edge selection heuristic (Proposal C)
             self.cached_sealed_neighbor_sizes = Some(sealed_neighbor_sizes);
@@ -628,8 +621,8 @@ impl Solver {
         self.debug_current_prop = "compass_in_comp";
         // Compass bounds: prune and propagate based on compass clues
         let mut progress = false;
-        let mut compass_forced_cuts: Vec<EdgeId> = Vec::new();
-        let mut compass_forced_uncuts: Vec<EdgeId> = Vec::new();
+        let mut compass_cut_ef = EdgeForcer::new();
+        let mut compass_uncut_ef = EdgeForcer::new();
 
         for clue in &self.puzzle.cell_clues {
             let CellClue::Compass { cell, compass } = clue else {
@@ -690,7 +683,7 @@ impl Solver {
                             _ => false,
                         };
                         if matches {
-                            compass_forced_cuts.push(e);
+                            compass_cut_ef.force_cut(e);
                         }
                     }
                 }
@@ -702,7 +695,7 @@ impl Solver {
                     // Growing in any other direction could create new growth
                     // edges in this direction via multi-hop paths, so we must
                     // ensure no alternative paths exist.
-                    if self.can_grow_buf[ci] {
+                    if self.is_growing(ci) {
                         let mut dir_growth_count = 0usize;
                         let mut dir_last_edge: Option<EdgeId> = None;
                         for &e in &self.growth_edges[ci] {
@@ -756,7 +749,7 @@ impl Solver {
                                 }
                             }
                             if all_others_blocked {
-                                compass_forced_uncuts.push(dir_last_edge.unwrap());
+                                compass_uncut_ef.force_uncut(dir_last_edge.unwrap());
                             }
                         }
                     }
@@ -765,7 +758,7 @@ impl Solver {
                 // Sealed component with unsatisfied compass constraint → contradiction.
                 // If the component can't grow but needs more cells in some direction,
                 // the compass requirement can never be met.
-                if !self.can_grow_buf[ci] {
+                if self.is_sealed(ci) {
                     for &(val, idx) in &[
                         (compass.n, 0),
                         (compass.s, 1),
@@ -878,10 +871,7 @@ impl Solver {
             // if removing it would disconnect CI cells from cells in the unsatisfied direction.
             // Skip during probing to avoid performance overhead on every probing propagation.
             if !self.in_probing {
-                for ci in 0..num_comp {
-                    if !self.can_grow_buf[ci] {
-                        continue;
-                    }
+                for ci in self.growing(num_comp).collect::<Vec<_>>() {
                     if compass_per_comp[ci].is_empty() {
                         continue;
                     }
@@ -1123,16 +1113,16 @@ impl Solver {
                         }
 
                         if force_uncut {
-                            compass_forced_uncuts.push(bridge_eid);
+                            compass_uncut_ef.force_uncut(bridge_eid);
                         }
                     }
 
                     // Single-gateway-edge forcing.
-                    // Skip if there are pending compass_forced_cuts: those cuts have not
+                    // Skip if there are pending forced cuts: those cuts have not
                     // yet been applied to self.edges, so the reachable subgraph is stale
                     // and the backward BFS may traverse soon-to-be-Cut edges, leading to
                     // spurious forced Uncuts.
-                    if !compass_forced_cuts.is_empty() {
+                    if !compass_cut_ef.is_empty() {
                         continue;
                     }
 
@@ -1243,7 +1233,7 @@ impl Solver {
 
                         if gateway_edges.is_empty() {
                             // No Unknown gateway from CI to dir cells found.
-                            // Do NOT return Err() here: pending compass_forced_cuts
+                            // Do NOT return Err() here: pending forced cuts
                             // (not yet applied to self.edges) may already block the
                             // paths the backward BFS traversed, so the apparent lack
                             // of a gateway could be spurious. Leave contradiction
@@ -1252,15 +1242,15 @@ impl Solver {
                         }
 
                         if gateway_edges.len() == 1 {
-                            compass_forced_uncuts.push(gateway_edges[0]);
+                            compass_uncut_ef.force_uncut(gateway_edges[0]);
                         }
                     }
                 }
             } // end if !self.in_probing
         }
 
-        progress = self.apply_forced_cuts(&compass_forced_cuts)? || progress;
-        progress = self.apply_forced_uncuts(&compass_forced_uncuts)? || progress;
+        progress = compass_cut_ef.apply(self)? || progress;
+        progress = compass_uncut_ef.apply(self)? || progress;
         Ok(progress)
     }
 
@@ -1285,7 +1275,7 @@ impl Solver {
             }
 
             // Collect edges to force Cut for non-boxy (to avoid rectangle formation)
-            let mut non_boxy_forced_cuts: Vec<EdgeId> = Vec::new();
+            let mut non_boxy_ef = EdgeForcer::new();
 
             for ci in 0..num_comp {
                 let cell_count = self.curr_comp_sz[ci];
@@ -1297,7 +1287,7 @@ impl Solver {
                 let bbox_size = bbox_w * bbox_h;
                 let is_rect = cell_count == bbox_size;
 
-                if !self.can_grow_buf[ci] {
+                if self.is_sealed(ci) {
                     // Sealed component: final check
                     if self.puzzle.rules.non_boxy && is_rect {
                         return Err(());
@@ -1346,7 +1336,7 @@ impl Solver {
                                     {
                                         if let Some(e) = self.grid.edge_between(c, nid) {
                                             if self.edges[e] == EdgeState::Unknown {
-                                                non_boxy_forced_cuts.push(e);
+                                                non_boxy_ef.force_cut(e);
                                             }
                                         }
                                     }
@@ -1358,7 +1348,7 @@ impl Solver {
             }
 
             // Apply non-boxy forced cuts
-            progress = self.apply_forced_cuts(&non_boxy_forced_cuts)? || progress;
+            progress = non_boxy_ef.apply(self)? || progress;
         }
         Ok(progress)
     }
@@ -1397,8 +1387,8 @@ impl Solver {
             } else {
                 (ci2, ci1)
             };
-            let smaller_done = !self.can_grow_buf[smaller_ci];
-            let larger_done = !self.can_grow_buf[larger_ci];
+            let smaller_done = self.is_sealed(smaller_ci);
+            let larger_done = self.is_sealed(larger_ci);
 
             if smaller_done && larger_done {
                 if self.curr_comp_sz[smaller_ci] >= self.curr_comp_sz[larger_ci] {
@@ -1446,7 +1436,7 @@ impl Solver {
     fn propagate_diff_clues(&mut self, _num_comp: usize) -> Result<bool, ()> {
         // Diff clues: when one side is sealed, propagate target area to the other side
         let mut progress = false;
-        let mut diff_forced_cuts: Vec<EdgeId> = Vec::new();
+        let mut diff_ef = EdgeForcer::new();
         for &(e, value) in &self.diff_clues {
             if self.edges[e] != EdgeState::Cut {
                 continue;
@@ -1460,8 +1450,8 @@ impl Solver {
             if ci1 == ci2 {
                 continue;
             }
-            let sealed1 = !self.can_grow_buf[ci1];
-            let sealed2 = !self.can_grow_buf[ci2];
+            let sealed1 = self.is_sealed(ci1);
+            let sealed2 = self.is_sealed(ci2);
             if sealed1 && sealed2 {
                 if self.curr_comp_sz[ci1].abs_diff(self.curr_comp_sz[ci2]) != value {
                     return Err(());
@@ -1505,13 +1495,13 @@ impl Solver {
                 if self.curr_comp_sz[other_ci] == new_target {
                     for &ge in &self.growth_edges[other_ci] {
                         if self.edges[ge] == EdgeState::Unknown {
-                            diff_forced_cuts.push(ge);
+                            diff_ef.force_cut(ge);
                         }
                     }
                 }
             }
         }
-        progress = self.apply_forced_cuts(&diff_forced_cuts)? || progress;
+        progress = diff_ef.apply(self)? || progress;
         Ok(progress)
     }
 
@@ -1550,7 +1540,7 @@ impl Solver {
             let max_a = self.curr_max_area[ci];
 
             if let Some(t) = target {
-                if self.curr_comp_sz[ci] < t && !self.can_grow_buf[ci] {
+                if self.curr_comp_sz[ci] < t && self.is_sealed(ci) {
                     return Err(());
                 }
                 // Growth potential check: if the component can grow but
@@ -1559,7 +1549,7 @@ impl Solver {
                 // the target can never be reached → contradiction.
                 // Only check when nearly sealed (few growth options) to
                 // limit overhead. Skip during probing.
-                if !self.in_probing && self.can_grow_buf[ci] && self.curr_comp_sz[ci] < t {
+                if !self.in_probing && self.is_growing(ci) && self.curr_comp_sz[ci] < t {
                     let unk_growth = self.growth_edges[ci]
                         .iter()
                         .filter(|&&e| self.edges[e] == EdgeState::Unknown)
@@ -1571,7 +1561,7 @@ impl Solver {
                         }
                     }
                 }
-                if self.curr_comp_sz[ci] == t && self.can_grow_buf[ci] {
+                if self.curr_comp_sz[ci] == t && self.is_growing(ci) {
                     let to_cut: Vec<EdgeId> = self.growth_edges[ci]
                         .iter()
                         .filter(|&&e| self.edges[e] == EdgeState::Unknown)
@@ -1586,10 +1576,10 @@ impl Solver {
                 }
             } else {
                 // Not a fixed target, but check bounds
-                if self.curr_comp_sz[ci] < min_a && !self.can_grow_buf[ci] {
+                if self.curr_comp_sz[ci] < min_a && self.is_sealed(ci) {
                     return Err(());
                 }
-                if self.curr_comp_sz[ci] == max_a && self.can_grow_buf[ci] {
+                if self.curr_comp_sz[ci] == max_a && self.is_growing(ci) {
                     let to_cut: Vec<EdgeId> = self.growth_edges[ci]
                         .iter()
                         .filter(|&&e| self.edges[e] == EdgeState::Unknown)
@@ -1625,7 +1615,7 @@ impl Solver {
                 if ci1 == ci2 {
                     continue;
                 }
-                if self.can_grow_buf[ci1] || self.can_grow_buf[ci2] {
+                if self.is_growing(ci1) || self.is_growing(ci2) {
                     continue;
                 }
                 if self.curr_comp_sz[ci1] == self.curr_comp_sz[ci2] {
@@ -1705,13 +1695,7 @@ impl Solver {
         }
 
         // Quick check: need at least one sealed component
-        let mut has_sealed = false;
-        for ci in 0..num_comp {
-            if !self.can_grow_buf[ci] {
-                has_sealed = true;
-                break;
-            }
-        }
+        let has_sealed = self.sealed(num_comp).next().is_some();
         if !has_sealed {
             return Ok(());
         }
@@ -1729,7 +1713,7 @@ impl Solver {
                 continue;
             }
             let ci = self.curr_comp_id[c];
-            if ci >= num_comp || !self.can_grow_buf[ci] {
+            if !self.is_growing(ci) {
                 continue;
             }
 
@@ -1755,7 +1739,7 @@ impl Solver {
                         continue;
                     }
                     let oci = self.curr_comp_id[other];
-                    if oci >= num_comp || !self.can_grow_buf[oci] {
+                    if !self.is_growing(oci) {
                         continue;
                     }
                     self.comp_buf[other] = 0;
@@ -1822,7 +1806,7 @@ impl Solver {
                     continue;
                 }
                 let ci2 = self.curr_comp_id[c2];
-                if ci2 < num_comp && !self.can_grow_buf[ci2] {
+                if self.is_sealed(ci2) {
                     continue; // skip sealed cells
                 }
 
@@ -1872,7 +1856,7 @@ impl Solver {
         // Compute max min_area among compass-covered components for threshold
         let mut max_compass_min = 0usize;
         for ci in 0..num_comp {
-            if self.can_grow_buf[ci] && self.curr_min_area.len() > ci {
+            if self.is_growing(ci) && self.curr_min_area.len() > ci {
                 max_compass_min = max_compass_min.max(self.curr_min_area[ci]);
             }
         }
@@ -1885,7 +1869,7 @@ impl Solver {
                 continue;
             }
             let ci = self.curr_comp_id[c];
-            if ci >= num_comp || !self.can_grow_buf[ci] {
+            if !self.is_growing(ci) {
                 continue;
             }
 
@@ -1909,7 +1893,7 @@ impl Solver {
                         continue;
                     }
                     let oci = self.curr_comp_id[other];
-                    if oci >= num_comp || !self.can_grow_buf[oci] {
+                    if !self.is_growing(oci) {
                         continue;
                     }
                     self.comp_buf[other] = 0;
@@ -2104,7 +2088,7 @@ impl Solver {
             if ci == usize::MAX {
                 continue;
             }
-            if !self.can_grow_buf[ci] {
+            if self.is_sealed(ci) {
                 continue;
             }
             let max_a = self.curr_max_area[ci];

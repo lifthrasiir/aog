@@ -131,9 +131,7 @@ impl Solver {
             }
 
             // Probe Cut
-            let snap = self.snapshot();
-            let cut_ok = self.set_edge(e, EdgeState::Cut) && self.propagate().is_ok();
-            self.restore(snap);
+            let cut_ok = self.probe(|s| s.set_edge(e, EdgeState::Cut));
 
             if !cut_ok {
                 // Cut contradicts -> force Uncut
@@ -148,9 +146,7 @@ impl Solver {
             }
 
             // Probe Uncut
-            let snap = self.snapshot();
-            let uncut_ok = self.set_edge(e, EdgeState::Uncut) && self.propagate().is_ok();
-            self.restore(snap);
+            let uncut_ok = self.probe(|s| s.set_edge(e, EdgeState::Uncut));
 
             if !uncut_ok {
                 // Uncut contradicts -> force Cut
@@ -218,11 +214,9 @@ impl Solver {
 
                     for &v1 in &vals {
                         for &v2 in &vals {
-                            let snap = self.snapshot();
-                            let ok = self.set_edge(e1, v1)
-                                && self.set_edge(e2, v2)
-                                && self.propagate().is_ok();
-                            self.restore(snap);
+                            let ok = self.probe(|s| {
+                                s.set_edge(e1, v1) && s.set_edge(e2, v2)
+                            });
 
                             if ok {
                                 ok_count += 1;

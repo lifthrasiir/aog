@@ -72,10 +72,7 @@ impl Solver {
         // Quick check: if no components have rose symbols, skip
         let num_comp = self.curr_comp_sz.len();
         let mut any_rose_comp = false;
-        for ci in 0..num_comp {
-            if !self.can_grow_buf[ci] {
-                continue;
-            }
+        for ci in self.growing(num_comp).collect::<Vec<_>>() {
             for &c in &self.comp_cells[ci] {
                 if self.cell_rose_sym[c] != u8::MAX {
                     any_rose_comp = true;
@@ -92,10 +89,7 @@ impl Solver {
 
         // Precompute comp_rose bitmask for each growing component
         let mut comp_rose_arr: Vec<u8> = vec![0; num_comp];
-        for ci in 0..num_comp {
-            if !self.can_grow_buf[ci] {
-                continue;
-            }
+        for ci in self.growing(num_comp).collect::<Vec<_>>() {
             for &c in &self.comp_cells[ci] {
                 let sym = self.cell_rose_sym[c];
                 if sym != u8::MAX {
@@ -107,10 +101,7 @@ impl Solver {
         // --- Phase 1: Cross-type chokepoint Uncut forcing ---
         // Only check components where cutting a growth edge might disconnect a required type.
         // Skip components with many unknown growth edges (cutting one rarely disconnects).
-        for ci in 0..num_comp {
-            if !self.can_grow_buf[ci] {
-                continue;
-            }
+        for ci in self.growing(num_comp).collect::<Vec<_>>() {
 
             let comp_rose = comp_rose_arr[ci];
             let missing = self.rose_bits_all & !comp_rose;
@@ -142,10 +133,7 @@ impl Solver {
         }
 
         // --- Phase 2: Two-level restricted reachability + single-growth-edge forcing ---
-        for ci in 0..num_comp {
-            if !self.can_grow_buf[ci] {
-                continue;
-            }
+        for ci in self.growing(num_comp).collect::<Vec<_>>() {
 
             let comp_rose = comp_rose_arr[ci];
             let missing = self.rose_bits_all & !comp_rose;
@@ -191,11 +179,7 @@ impl Solver {
             return Ok(false);
         }
         let num_comp = self.curr_comp_sz.len();
-
-        for ci in 0..num_comp {
-            if !self.can_grow_buf[ci] {
-                continue;
-            }
+        for ci in self.growing(num_comp).collect::<Vec<_>>() {
 
             let mut comp_rose: u8 = 0;
             for &c in &self.comp_cells[ci] {
