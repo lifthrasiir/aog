@@ -12,6 +12,51 @@ mod watchtower;
 use super::Solver;
 use crate::types::*;
 
+/// State and reusable buffers used exclusively within the propagation subsystem.
+pub(crate) struct PropagationState {
+    /// Whether any palisade cell clue is present (pre-computed once in new()).
+    pub(crate) has_palisade_clue: bool,
+    /// Pre-extracted diff clues: (edge_id, value). Consumed by `propagate_diff_clues`.
+    pub(crate) diff_clues: Vec<(EdgeId, usize)>,
+    /// When sum of distinct area values equals total_cells, all same-area cells
+    /// must share a piece — enables grouped-area search path.
+    pub(crate) same_area_groups: bool,
+    /// Exact piece count deduced from rose window (None if undetermined or absent).
+    pub(crate) rose_exact_piece_count: Option<usize>,
+    /// Per-component minimum area (updated each propagation round).
+    pub(crate) curr_min_area: Vec<usize>,
+    /// Per-component maximum area (updated each propagation round).
+    pub(crate) curr_max_area: Vec<usize>,
+    /// Growth edges per component (populated by build_components).
+    pub(crate) growth_edges: Vec<Vec<EdgeId>>,
+    /// Reusable BFS buffer for component traversal.
+    pub(crate) comp_buf: Vec<usize>,
+    /// Secondary reusable BFS buffer (ID mapping etc.).
+    pub(crate) comp_buf2: Vec<usize>,
+}
+
+impl PropagationState {
+    pub(crate) fn new(
+        has_palisade_clue: bool,
+        diff_clues: Vec<(EdgeId, usize)>,
+        same_area_groups: bool,
+        rose_exact_piece_count: Option<usize>,
+        nc: usize,
+    ) -> Self {
+        Self {
+            has_palisade_clue,
+            diff_clues,
+            same_area_groups,
+            rose_exact_piece_count,
+            curr_min_area: Vec::new(),
+            curr_max_area: Vec::new(),
+            growth_edges: Vec::new(),
+            comp_buf: vec![usize::MAX; nc],
+            comp_buf2: Vec::new(),
+        }
+    }
+}
+
 impl Solver {
     /// Check if all currently-decided edges are consistent with the known solution.
     /// Used for debug tracing of false contradictions.
@@ -63,7 +108,7 @@ impl Solver {
             );
             run_prop!(
                 "loop_closure",
-                !self.in_probing && self.rose_exact_piece_count.map_or(false, |p| p >= 2),
+                !self.in_probing && self.prop.rose_exact_piece_count.map_or(false, |p| p >= 2),
                 self.propagate_loop_closure()
             );
             run_prop!(
@@ -74,7 +119,7 @@ impl Solver {
             run_prop!("area_bounds", true, self.propagate_area_bounds());
             run_prop!(
                 "dual_conn",
-                self.rose_exact_piece_count.map_or(false, |p| p >= 2),
+                self.prop.rose_exact_piece_count.map_or(false, |p| p >= 2),
                 self.propagate_dual_connectivity()
             );
             run_prop!("rose_parity", true, self.propagate_parity());
@@ -82,12 +127,12 @@ impl Solver {
             run_prop!("rose_phase3", true, self.propagate_rose_phase3());
             run_prop!(
                 "same_area_reach",
-                self.same_area_groups,
+                self.prop.same_area_groups,
                 self.propagate_same_area_reachability()
             );
             run_prop!(
                 "palisade",
-                self.has_palisade_clue,
+                self.prop.has_palisade_clue,
                 self.propagate_palisade_constraints()
             );
             run_prop!(

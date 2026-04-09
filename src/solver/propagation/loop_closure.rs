@@ -13,7 +13,7 @@ impl Solver {
     /// the number of closed loops cannot exceed pieces - 1.
     pub(crate) fn propagate_loop_closure(&mut self) -> Result<bool, ()> {
         // Only meaningful when piece count is known (need it for loop limit)
-        let max_loops = match self.rose_exact_piece_count {
+        let max_loops = match self.prop.rose_exact_piece_count {
             Some(p) if p >= 2 => p - 1,
             _ => return Ok(false),
         };

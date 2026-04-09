@@ -110,7 +110,7 @@ impl Solver {
 
             // Count unknown growth edges; only check chokepoints (1-2 edges)
             let mut unknown_edges: Vec<EdgeId> = Vec::new();
-            for &e in &self.growth_edges[ci] {
+            for &e in &self.prop.growth_edges[ci] {
                 if self.edges[e] == EdgeState::Unknown {
                     unknown_edges.push(e);
                 }
@@ -151,7 +151,7 @@ impl Solver {
             // Single Unknown growth edge → force Uncut
             let mut unknown_growth: Option<EdgeId> = None;
             let mut unknown_count = 0usize;
-            for &e in &self.growth_edges[ci] {
+            for &e in &self.prop.growth_edges[ci] {
                 if self.edges[e] == EdgeState::Unknown {
                     unknown_count += 1;
                     unknown_growth = Some(e);
@@ -191,7 +191,7 @@ impl Solver {
             }
 
             // Check each growth edge: if neighbor cell has a rose symbol, force Cut
-            let growth: Vec<EdgeId> = self.growth_edges[ci]
+            let growth: Vec<EdgeId> = self.prop.growth_edges[ci]
                 .iter()
                 .copied()
                 .filter(|&e| self.edges[e] == EdgeState::Unknown)
@@ -221,7 +221,7 @@ impl Solver {
     /// Seeds the UF with:
     ///   - Rose cells of the same type → parity=1 (must be in different pieces)
     ///   - Uncut edges → parity=0 (cells are in the same piece)
-    ///   - manual_sames → parity=0, manual_diffs → parity=1
+    ///   - sames → parity=0, diffs → parity=1
     ///
     /// Cut edges are NOT used as seeds: a cut edge between two cells does not
     /// guarantee they are in different pieces (they may be connected via other paths).
@@ -229,13 +229,16 @@ impl Solver {
     /// Detects contradictions (parity conflict) and forces Cut on unknown edges
     /// where both endpoints are already determined to be in different pieces.
     pub(crate) fn propagate_parity(&mut self) -> Result<bool, ()> {
-        if self.rose_bits_all == 0 && self.manual_diffs.is_empty() && self.manual_sames.is_empty() {
+        if self.rose_bits_all == 0
+            && self.pair_branch.diffs.is_empty()
+            && self.pair_branch.sames.is_empty()
+        {
             return Ok(false);
         }
 
         let n = self.grid.num_cells();
         let ne = self.grid.num_edges();
-        let two_piece = self.rose_exact_piece_count == Some(2);
+        let two_piece = self.prop.rose_exact_piece_count == Some(2);
 
         let mut uf = ParityUF::new(n);
 
@@ -253,15 +256,15 @@ impl Solver {
             }
         }
 
-        // manual_sames → parity=0: always valid (asserting same piece definitively)
-        for &(c1, c2) in &self.manual_sames {
+        // sames → parity=0: always valid (asserting same piece definitively)
+        for &(c1, c2) in &self.pair_branch.sames {
             if uf.union(c1, c2, 0).is_err() {
                 return Err(());
             }
         }
-        // manual_diffs → parity=1: only safe for 2-piece puzzles (same bipartite limitation)
+        // diffs → parity=1: only safe for 2-piece puzzles (same bipartite limitation)
         if two_piece {
-            for &(c1, c2) in &self.manual_diffs {
+            for &(c1, c2) in &self.pair_branch.diffs {
                 if uf.union(c1, c2, 1).is_err() {
                     return Err(());
                 }

@@ -8,7 +8,7 @@ impl Solver {
 
     pub(crate) fn solve_normal(&mut self) {
         // When distinct area sum = total cells, use grouped area search
-        if self.same_area_groups {
+        if self.prop.same_area_groups {
             self.solve_grouped_areas();
             return;
         }
@@ -26,8 +26,8 @@ impl Solver {
 
         if !self.puzzle.rules.shape_bank.is_empty() || total_clue_area == self.total_cells {
             if !self.puzzle.rules.shape_bank.is_empty() {
-                self.prepare_shape_transforms();
-                self.shape_bank_canonicals =
+                self.prepare_transforms();
+                self.shape_search.canonicals =
                     self.puzzle.rules.shape_bank.iter().map(canonical).collect();
             }
             self.backtrack_pieces();
@@ -456,18 +456,18 @@ impl Solver {
 
     pub(crate) fn try_single_shape(&mut self, shape: &Shape) {
         let saved_bank = std::mem::take(&mut self.puzzle.rules.shape_bank);
-        let saved_transforms = std::mem::take(&mut self.shape_transforms);
-        let saved_canonicals = std::mem::take(&mut self.shape_bank_canonicals);
+        let saved_transforms = std::mem::take(&mut self.shape_search.transforms);
+        let saved_canonicals = std::mem::take(&mut self.shape_search.canonicals);
 
         self.puzzle.rules.shape_bank = vec![shape.clone()];
-        self.prepare_shape_transforms();
-        self.shape_bank_canonicals = vec![canonical(shape)];
+        self.prepare_transforms();
+        self.shape_search.canonicals = vec![canonical(shape)];
 
         self.backtrack_pieces();
 
         self.puzzle.rules.shape_bank = saved_bank;
-        self.shape_transforms = saved_transforms;
-        self.shape_bank_canonicals = saved_canonicals;
+        self.shape_search.transforms = saved_transforms;
+        self.shape_search.canonicals = saved_canonicals;
     }
 }
 

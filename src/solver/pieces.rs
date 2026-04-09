@@ -110,7 +110,7 @@ impl Solver {
                         }
                     }
                     CellClue::Polyomino { shape, .. } => {
-                        if self.shape_bank_canonicals[shape_idx].cells != canonical(shape).cells {
+                        if self.shape_search.canonicals[shape_idx].cells != canonical(shape).cells {
                             return false;
                         }
                     }
@@ -196,7 +196,7 @@ impl Solver {
         }
         let rose_symbols: Vec<u8> = rose_symbols_set.into_iter().collect();
 
-        for (si, transforms) in self.shape_transforms.iter().enumerate() {
+        for (si, transforms) in self.shape_search.transforms.iter().enumerate() {
             for transform in transforms {
                 let area = transform.len();
                 for r in 0..self.grid.rows {
@@ -236,7 +236,7 @@ impl Solver {
                             placements.push(Piece {
                                 cells,
                                 area,
-                                canonical: self.shape_bank_canonicals[si].clone(),
+                                canonical: self.shape_search.canonicals[si].clone(),
                             });
                         }
                     }
@@ -375,8 +375,7 @@ impl Solver {
                 ineq_pairs.len(),
                 (0..n)
                     .filter(|&c| self.grid.cell_exists[c]
-                        && (cell_min[c] != self.eff_min_area
-                            || cell_max[c] != self.eff_max_area))
+                        && (cell_min[c] != self.eff_min_area || cell_max[c] != self.eff_max_area))
                     .count()
             );
         }
@@ -430,12 +429,7 @@ impl Solver {
                 "piece-based search with incremental edge-clue check ({} placements)",
                 placements.len()
             );
-            self.backtrack_normal_with_check(
-                dlx,
-                placements,
-                watchtower_verts,
-                &mut cell_to_piece,
-            );
+            self.backtrack_normal_with_check(dlx, placements, watchtower_verts, &mut cell_to_piece);
         } else {
             let mut solution = Vec::new();
             dlx.search(&mut solution, &mut |sol_rows| {

@@ -1,5 +1,33 @@
 use super::Solver;
 use crate::types::*;
+use std::collections::HashSet;
+
+/// Branching constraint state managed by the pair-branching subsystem.
+/// Owned by pair.rs; edge_state.rs truncates on snapshot restore.
+pub(crate) struct PairBranchState {
+    /// Manual DIFF constraints accumulated during branching.
+    pub(crate) diffs: Vec<(CellId, CellId)>,
+    /// Fast-lookup set for manual DIFF pairs.
+    pub(crate) diff_set: HashSet<(CellId, CellId)>,
+    /// Manual SAME constraints accumulated during branching.
+    pub(crate) sames: Vec<(CellId, CellId)>,
+    /// Fast-lookup set for manual SAME pairs.
+    pub(crate) same_set: HashSet<(CellId, CellId)>,
+    /// Reusable BFS parent buffer for path-finding.
+    pub(crate) bfs_prev: Vec<Option<(CellId, EdgeId)>>,
+}
+
+impl PairBranchState {
+    pub(crate) fn new() -> Self {
+        Self {
+            diffs: Vec::new(),
+            diff_set: HashSet::new(),
+            sames: Vec::new(),
+            same_set: HashSet::new(),
+            bfs_prev: Vec::new(),
+        }
+    }
+}
 
 /// Cell-pair data for rose window puzzles.
 /// Stores rose cells grouped by type for pair-based branching.
@@ -48,7 +76,7 @@ impl Solver {
     // --- Inline DIFF check (no rebuild needed) ---
 
     /// Check if two cells must be in different pieces.
-    /// Uses only Solver's existing state: cell_rose_sym, manual_diffs, edges.
+    /// Uses only Solver's existing state: cell_rose_sym, diffs, edges.
     #[inline]
     fn is_diff_inline(&self, c1: CellId, c2: CellId) -> bool {
         // Same-type rose cells are always DIFF
@@ -58,7 +86,9 @@ impl Solver {
             return true;
         }
         // Manual DIFFs from branching (use precomputed set for O(1) lookup)
-        if self.manual_diff_set.contains(&(c1, c2)) || self.manual_diff_set.contains(&(c2, c1)) {
+        if self.pair_branch.diff_set.contains(&(c1, c2))
+            || self.pair_branch.diff_set.contains(&(c2, c1))
+        {
             return true;
         }
         // Direct Cut edge between them
@@ -75,11 +105,11 @@ impl Solver {
     // --- Pair-based branching methods ---
 
     /// BFS from c1 through Uncut+Unknown edges to find c2.
-    /// Fills self.bfs_prev with path reconstruction data.
+    /// Fills self.pair_branch.bfs_prev with path reconstruction data.
     pub(crate) fn bfs_path(&mut self, c1: CellId, c2: CellId) -> bool {
         let n = self.grid.num_cells();
         self.rose_visited[..n].fill(false);
-        self.bfs_prev.resize(n, None);
+        self.pair_branch.bfs_prev.resize(n, None);
         self.rose_visited[c1] = true;
         self.q_buf.clear();
         self.q_buf.push(c1);
@@ -98,7 +128,7 @@ impl Solver {
                     continue;
                 }
                 self.rose_visited[other] = true;
-                self.bfs_prev[other] = Some((cur, eid));
+                self.pair_branch.bfs_prev[other] = Some((cur, eid));
                 self.q_buf.push(other);
             }
         }
@@ -116,7 +146,7 @@ impl Solver {
         }
         let mut cur = c2;
         while cur != c1 {
-            if let Some((prev, eid)) = self.bfs_prev[cur] {
+            if let Some((prev, eid)) = self.pair_branch.bfs_prev[cur] {
                 if self.edges[eid] == EdgeState::Unknown {
                     if !self.set_edge(eid, EdgeState::Uncut) {
                         return Err(());
@@ -202,7 +232,7 @@ impl Solver {
 
             // BFS from compass cell through Unknown+Uncut edges
             self.rose_visited[..n].fill(false);
-            self.bfs_prev.resize(n, None);
+            self.pair_branch.bfs_prev.resize(n, None);
             self.rose_visited[compass_cell] = true;
             self.q_buf.clear();
             self.q_buf.push(compass_cell);
@@ -225,7 +255,7 @@ impl Solver {
                         let mut dist = 0usize;
                         let mut tmp = cur;
                         while tmp != compass_cell {
-                            if let Some((p, _)) = self.bfs_prev[tmp] {
+                            if let Some((p, _)) = self.pair_branch.bfs_prev[tmp] {
                                 dist += 1;
                                 tmp = p;
                             } else {
@@ -345,7 +375,7 @@ impl Solver {
                         continue;
                     }
                     self.rose_visited[other] = true;
-                    self.bfs_prev[other] = Some((cur, eid));
+                    self.pair_branch.bfs_prev[other] = Some((cur, eid));
                     self.q_buf.push(other);
                 }
             }
@@ -436,8 +466,10 @@ impl Solver {
         {
             let snap = self.snapshot();
             self.debug_current_prop = "flat_compass_diff";
-            self.manual_diffs.push((compass_cell, target_cell));
-            self.manual_diff_set.insert((compass_cell, target_cell));
+            self.pair_branch.diffs.push((compass_cell, target_cell));
+            self.pair_branch
+                .diff_set
+                .insert((compass_cell, target_cell));
             if self.propagate().is_ok() {
                 self.branch_compass_flat_inner(pairs, idx + 1);
             }
@@ -470,8 +502,8 @@ impl Solver {
         // --- Branch 2: DIFF (force them into different pieces) ---
         let snap = self.snapshot();
         self.debug_current_prop = "pair_diff";
-        self.manual_diffs.push((c1, c2));
-        self.manual_diff_set.insert((c1, c2));
+        self.pair_branch.diffs.push((c1, c2));
+        self.pair_branch.diff_set.insert((c1, c2));
         if self.propagate().is_ok() {
             self.backtrack_edges();
         }
@@ -520,7 +552,7 @@ impl Solver {
 
             // BFS from c1 through Uncut+Unknown, excluding type-0 cells
             self.rose_visited[..n].fill(false);
-            self.bfs_prev.resize(n, None);
+            self.pair_branch.bfs_prev.resize(n, None);
             self.rose_visited[c1] = true;
             self.q_buf.clear();
             self.q_buf.push(c1);
@@ -540,7 +572,7 @@ impl Solver {
                         let mut dist = 0usize;
                         let mut tmp = cur;
                         while tmp != c1 {
-                            if let Some((p, _)) = self.bfs_prev[tmp] {
+                            if let Some((p, _)) = self.pair_branch.bfs_prev[tmp] {
                                 dist += 1;
                                 tmp = p;
                             } else {
@@ -581,7 +613,7 @@ impl Solver {
                         continue;
                     }
                     self.rose_visited[other] = true;
-                    self.bfs_prev[other] = Some((cur, eid));
+                    self.pair_branch.bfs_prev[other] = Some((cur, eid));
                     self.q_buf.push(other);
                 }
             }

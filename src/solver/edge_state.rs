@@ -147,12 +147,14 @@ impl Solver {
             }
             self.edges[e] = old_state;
         }
-        self.manual_diffs.truncate(snap.manual_diffs);
-        self.manual_diff_set
-            .retain(|pair| self.manual_diffs.iter().any(|d| *d == *pair));
-        self.manual_sames.truncate(snap.manual_sames);
-        self.manual_same_set
-            .retain(|pair| self.manual_sames.iter().any(|d| *d == *pair));
+        self.pair_branch.diffs.truncate(snap.diffs);
+        self.pair_branch
+            .diff_set
+            .retain(|pair| self.pair_branch.diffs.iter().any(|d| *d == *pair));
+        self.pair_branch.sames.truncate(snap.sames);
+        self.pair_branch
+            .same_set
+            .retain(|pair| self.pair_branch.sames.iter().any(|d| *d == *pair));
     }
 
     /// Run `setup` to modify edge state. If setup returns true, propagate.

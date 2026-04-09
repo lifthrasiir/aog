@@ -1,5 +1,30 @@
 use super::Solver;
 use crate::types::*;
+use std::collections::HashSet;
+
+/// Cached data used exclusively by the edge selection heuristic.
+/// Populated by area propagation, consumed by `select_edge` / `prefer_cut_first`.
+pub(crate) struct EdgeSelectionCache {
+    /// All edge IDs with any clue (inequality, diff, gemini, delta) — always Cut.
+    pub(crate) clue_cut_edges: Vec<EdgeId>,
+    /// Sealed neighbor sizes per component, for size_separation heuristic.
+    pub(crate) sealed_neighbor_sizes: Option<Vec<HashSet<usize>>>,
+    /// Growth edge count per component.
+    pub(crate) growth_edge_count: Vec<usize>,
+    /// Vertices with watchtower clues (rebuilt after initial optimization pass).
+    pub(crate) watchtower_vertices: HashSet<VertexId>,
+}
+
+impl EdgeSelectionCache {
+    pub(crate) fn new(clue_cut_edges: Vec<EdgeId>, watchtower_vertices: HashSet<VertexId>) -> Self {
+        Self {
+            clue_cut_edges,
+            sealed_neighbor_sizes: None,
+            growth_edge_count: Vec::new(),
+            watchtower_vertices,
+        }
+    }
+}
 
 impl Solver {
     fn select_edge(&self) -> Option<(EdgeId, i32)> {
@@ -18,14 +43,14 @@ impl Solver {
         // Precompute clue-constrained components: components adjacent to any
         // clue edge (inequality, diff, gemini, delta). These components have
         // shape or size constraints from edge clues.
-        let has_clue_edges = !self.clue_cut_edges.is_empty();
+        let has_clue_edges = !self.edge_selection.clue_cut_edges.is_empty();
         let mut clue_constrained_comp: Vec<bool> = if has_clue_edges {
             vec![false; num_comp]
         } else {
             Vec::new()
         };
         if has_clue_edges {
-            for &ce in &self.clue_cut_edges {
+            for &ce in &self.edge_selection.clue_cut_edges {
                 if self.edges[ce] != EdgeState::Cut {
                     continue;
                 }
@@ -151,14 +176,14 @@ impl Solver {
             // General bonuses (apply regardless of size_separation)
 
             // Bonus: cutting would seal a component that has a target area
-            if ci1 < self.cached_growth_edge_count.len()
-                && self.cached_growth_edge_count[ci1] == 1
+            if ci1 < self.edge_selection.growth_edge_count.len()
+                && self.edge_selection.growth_edge_count[ci1] == 1
                 && self.curr_target_area[ci1].is_some()
             {
                 score += 75;
             }
-            if ci2 < self.cached_growth_edge_count.len()
-                && self.cached_growth_edge_count[ci2] == 1
+            if ci2 < self.edge_selection.growth_edge_count.len()
+                && self.edge_selection.growth_edge_count[ci2] == 1
                 && self.curr_target_area[ci2].is_some()
             {
                 score += 75;
@@ -179,7 +204,7 @@ impl Solver {
             }
 
             // Bonus: edge incident to a watchtower vertex
-            if !self.watchtower_vertices.is_empty() {
+            if !self.edge_selection.watchtower_vertices.is_empty() {
                 let (is_h, r, c) = self.grid.decode_edge(e);
                 let v1 = self.grid.vertex(r, c);
                 let v2 = if is_h {
@@ -187,7 +212,8 @@ impl Solver {
                 } else {
                     self.grid.vertex(r, c + 1)
                 };
-                if self.watchtower_vertices.contains(&v1) || self.watchtower_vertices.contains(&v2)
+                if self.edge_selection.watchtower_vertices.contains(&v1)
+                    || self.edge_selection.watchtower_vertices.contains(&v2)
                 {
                     score += 25;
                 }
@@ -197,16 +223,14 @@ impl Solver {
             // edges at cut-path endpoints (vertices with exactly 1 cut edge) are
             // the most constrained — they must extend the path. Resolving these
             // early prevents deep wrong branches in Slitherlink-like puzzles.
-            if self.puzzle.rules.loopy && !self.watchtower_vertices.is_empty() {
+            if self.puzzle.rules.loopy && !self.edge_selection.watchtower_vertices.is_empty() {
                 let (is_h, r, c) = self.grid.decode_edge(e);
                 let (v1i, v1j) = (r, c);
-                let (v2i, v2j) = if is_h {
-                    (r + 1, c)
-                } else {
-                    (r, c + 1)
-                };
+                let (v2i, v2j) = if is_h { (r + 1, c) } else { (r, c + 1) };
                 for &(vi, vj) in &[(v1i, v1j), (v2i, v2j)] {
-                    let cut_deg: usize = self.grid.vertex_edges(vi, vj)
+                    let cut_deg: usize = self
+                        .grid
+                        .vertex_edges(vi, vj)
                         .into_iter()
                         .flatten()
                         .filter(|eid| self.edges[*eid] == EdgeState::Cut)
@@ -221,7 +245,9 @@ impl Solver {
             // Rose cell proximity bonus: prefer edges near rose cells.
             // The boundary between pieces must separate rose cells of the same type,
             // so edges near them are more likely to be on the boundary.
-            if self.rose_bits_all != 0 && (self.cell_rose_sym[c1] != u8::MAX || self.cell_rose_sym[c2] != u8::MAX) {
+            if self.rose_bits_all != 0
+                && (self.cell_rose_sym[c1] != u8::MAX || self.cell_rose_sym[c2] != u8::MAX)
+            {
                 score += 80;
             }
             // Also bonus edges whose cells are in different rose-containing components
@@ -269,7 +295,7 @@ impl Solver {
             // Size separation heuristic bonuses
             if self.puzzle.rules.size_separation {
                 // Bonus: Uncut would create merge-size conflict with sealed neighbor
-                if let Some(ref sns) = self.cached_sealed_neighbor_sizes {
+                if let Some(ref sns) = self.edge_selection.sealed_neighbor_sizes {
                     if ci1 < sns.len() && ci2 < sns.len() {
                         let merged_sz = sz1 + sz2;
                         if sns[ci1].contains(&merged_sz) || sns[ci2].contains(&merged_sz) {
@@ -289,13 +315,13 @@ impl Solver {
 
                 // Additional sealing bonus: cutting would seal any component
                 // (even without target, sealing helps size_separation propagation)
-                if ci1 < self.cached_growth_edge_count.len()
-                    && self.cached_growth_edge_count[ci1] == 1
+                if ci1 < self.edge_selection.growth_edge_count.len()
+                    && self.edge_selection.growth_edge_count[ci1] == 1
                 {
                     score += 30;
                 }
-                if ci2 < self.cached_growth_edge_count.len()
-                    && self.cached_growth_edge_count[ci2] == 1
+                if ci2 < self.edge_selection.growth_edge_count.len()
+                    && self.edge_selection.growth_edge_count[ci2] == 1
                 {
                     score += 30;
                 }
@@ -330,7 +356,7 @@ impl Solver {
 
         // If Uncut would create a merge-size conflict, definitely try Cut first
         if self.puzzle.rules.size_separation {
-            if let Some(ref sns) = self.cached_sealed_neighbor_sizes {
+            if let Some(ref sns) = self.edge_selection.sealed_neighbor_sizes {
                 if ci1 < sns.len() && ci2 < sns.len() {
                     let merged_sz = sz1 + sz2;
                     if sns[ci1].contains(&merged_sz) || sns[ci2].contains(&merged_sz) {

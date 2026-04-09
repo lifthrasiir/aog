@@ -1,6 +1,25 @@
 use super::Solver;
 use crate::polyomino::{self, canonical, Rotation};
+use crate::types::Shape;
 use std::collections::{BTreeSet, HashSet};
+
+/// Precomputed shape bank data for piece-based search.
+/// Written by shapes.rs/match_solver.rs, read by pieces.rs.
+pub(crate) struct ShapeSearchState {
+    /// All distinct orientations for each shape in the bank.
+    pub(crate) transforms: Vec<Vec<Vec<(isize, isize)>>>,
+    /// Canonical forms of shapes in the bank (for dedup/comparison).
+    pub(crate) canonicals: Vec<Shape>,
+}
+
+impl ShapeSearchState {
+    pub(crate) fn new() -> Self {
+        Self {
+            transforms: Vec::new(),
+            canonicals: Vec::new(),
+        }
+    }
+}
 
 impl Solver {
     pub(crate) fn compute_area_bounds(&mut self) {
@@ -52,7 +71,6 @@ impl Solver {
         } else {
             self.populate_general();
         }
-        self.auto_populated_bank = !self.puzzle.rules.shape_bank.is_empty();
     }
 
     /// General: free polyominoes for all sizes in [eff_min_area, eff_max_area], capped at 5.
@@ -215,7 +233,7 @@ impl Solver {
         true
     }
 
-    pub(crate) fn prepare_shape_transforms(&mut self) {
+    pub(crate) fn prepare_transforms(&mut self) {
         for shape in &self.puzzle.rules.shape_bank {
             let mut seen: BTreeSet<Vec<(isize, isize)>> = BTreeSet::new();
             let mut transforms = Vec::new();
@@ -244,7 +262,7 @@ impl Solver {
                     }
                 }
             }
-            self.shape_transforms.push(transforms);
+            self.shape_search.transforms.push(transforms);
         }
     }
 }

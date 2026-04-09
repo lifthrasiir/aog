@@ -17,7 +17,7 @@ impl Solver {
     /// 3. **Bridge analysis**: cutting a bridge that creates a partition where
     ///    one side can't form a valid piece (area too small/large) → force Uncut.
     pub(crate) fn propagate_dual_connectivity(&mut self) -> Result<bool, ()> {
-        let num_pieces = match self.rose_exact_piece_count {
+        let num_pieces = match self.prop.rose_exact_piece_count {
             Some(p) if p >= 2 => p,
             _ => return Ok(false),
         };
@@ -31,7 +31,7 @@ impl Solver {
         // edges = Unknown edges between different components.
         let mut adj: Vec<Vec<(usize, EdgeId)>> = vec![Vec::new(); num_comp];
         for ci in 0..num_comp {
-            for &e in &self.growth_edges[ci] {
+            for &e in &self.prop.growth_edges[ci] {
                 if self.edges[e] != EdgeState::Unknown {
                     continue;
                 }
@@ -54,7 +54,7 @@ impl Solver {
             let must_grow = if let Some(t) = self.curr_target_area[ci] {
                 self.curr_comp_sz[ci] < t
             } else {
-                self.curr_comp_sz[ci] < self.curr_min_area[ci]
+                self.curr_comp_sz[ci] < self.prop.curr_min_area[ci]
             };
             if !must_grow {
                 continue;
@@ -62,7 +62,7 @@ impl Solver {
             // Count current Unknown growth edges
             let mut unk_edge: Option<EdgeId> = None;
             let mut unk_count = 0usize;
-            for &e in &self.growth_edges[ci] {
+            for &e in &self.prop.growth_edges[ci] {
                 if self.edges[e] == EdgeState::Unknown {
                     unk_count += 1;
                     unk_edge = Some(e);
@@ -116,7 +116,7 @@ impl Solver {
         // (each connected component of the component graph becomes exactly 1 piece)
         if num_cc == num_pieces {
             let to_force: Vec<EdgeId> = (0..n)
-                .flat_map(|ci| self.growth_edges[ci].iter().copied())
+                .flat_map(|ci| self.prop.growth_edges[ci].iter().copied())
                 .filter(|&e| self.edges[e] == EdgeState::Unknown)
                 .collect();
             for e in to_force {
@@ -275,7 +275,7 @@ mod tests {
 ",
         );
         s.total_cells = s.grid.total_existing_cells();
-        s.rose_exact_piece_count = Some(2);
+        s.prop.rose_exact_piece_count = Some(2);
         s.compute_area_bounds(); // sets eff_min_area, eff_max_area
         s.propagate_area_bounds().ok();
         s
@@ -303,7 +303,7 @@ mod tests {
 +---+---+
 ",
         );
-        s.rose_exact_piece_count = Some(2);
+        s.prop.rose_exact_piece_count = Some(2);
         s.total_cells = s.grid.total_existing_cells();
         s.puzzle.rules.minimum = Some(2);
         s.compute_area_bounds();
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(s.curr_comp_sz[ci_b], 1);
 
         // B should have exactly 1 growth edge (the bridge to A)
-        let unk_from_b: Vec<_> = s.growth_edges[ci_b]
+        let unk_from_b: Vec<_> = s.prop.growth_edges[ci_b]
             .iter()
             .filter(|&&e| s.edges[e] == EdgeState::Unknown)
             .collect();
@@ -432,7 +432,7 @@ mod tests {
 +---+---+---+---+
 ",
         );
-        s.rose_exact_piece_count = Some(2);
+        s.prop.rose_exact_piece_count = Some(2);
         s.total_cells = s.grid.total_existing_cells();
         s.compute_area_bounds();
 
@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(s.curr_target_area[ci], Some(3));
 
         // The only Unknown edge from this component should be v_edge(0,1) = (0,1)-(0,2)
-        let unk_edges: Vec<_> = s.growth_edges[ci]
+        let unk_edges: Vec<_> = s.prop.growth_edges[ci]
             .iter()
             .filter(|&&e| s.edges[e] == EdgeState::Unknown)
             .copied()

@@ -36,7 +36,7 @@ impl Solver {
                 reachable += 1;
             }
         }
-        reachable.min(self.curr_max_area[ci])
+        reachable.min(self.prop.curr_max_area[ci])
     }
 
     /// Flood fill, assign component IDs, compute target areas,
@@ -44,10 +44,10 @@ impl Solver {
     /// Returns the number of components.
     fn build_components(&mut self) -> Result<usize, ()> {
         let n = self.grid.num_cells();
-        self.comp_buf.fill(usize::MAX);
+        self.prop.comp_buf.fill(usize::MAX);
 
         for c in 0..n {
-            if !self.grid.cell_exists[c] || self.comp_buf[c] != usize::MAX {
+            if !self.grid.cell_exists[c] || self.prop.comp_buf[c] != usize::MAX {
                 continue;
             }
             self.flood_fill_decided(c);
@@ -58,14 +58,14 @@ impl Solver {
         // but we can just use a small array for mapping if we want to be super fast,
         // or just use the fact that comp_buf[c] is the representative cell.
         // Let's use a temporary mapping array to keep IDs contiguous.
-        self.comp_buf2.clear();
-        self.comp_buf2.resize(n, usize::MAX);
-        let id_map = &mut self.comp_buf2[..n];
+        self.prop.comp_buf2.clear();
+        self.prop.comp_buf2.resize(n, usize::MAX);
+        let id_map = &mut self.prop.comp_buf2[..n];
         for c in 0..n {
             if !self.grid.cell_exists[c] {
                 continue;
             }
-            let rep = self.comp_buf[c];
+            let rep = self.prop.comp_buf[c];
             if id_map[rep] == usize::MAX {
                 id_map[rep] = num_comp;
                 num_comp += 1;
@@ -75,7 +75,7 @@ impl Solver {
         self.curr_comp_id.resize(n, usize::MAX);
         for c in 0..n {
             if self.grid.cell_exists[c] {
-                self.curr_comp_id[c] = id_map[self.comp_buf[c]];
+                self.curr_comp_id[c] = id_map[self.prop.comp_buf[c]];
             }
         }
 
@@ -112,16 +112,17 @@ impl Solver {
 
         self.curr_target_area.clear();
         self.curr_target_area.resize(num_comp, None);
-        self.curr_min_area.clear();
-        self.curr_min_area
+        self.prop.curr_min_area.clear();
+        self.prop
+            .curr_min_area
             .resize(num_comp, self.eff_min_area.max(1));
-        self.curr_max_area.clear();
-        self.curr_max_area.resize(num_comp, self.eff_max_area);
+        self.prop.curr_max_area.clear();
+        self.prop.curr_max_area.resize(num_comp, self.eff_max_area);
 
         for ci in 0..num_comp {
             let mut areas = Vec::new();
-            let mut local_min = self.curr_min_area[ci];
-            let mut local_max = self.curr_max_area[ci];
+            let mut local_min = self.prop.curr_min_area[ci];
+            let mut local_max = self.prop.curr_max_area[ci];
 
             for clue in &comp_clues[ci] {
                 if let CellClue::Area { value, .. } = clue {
@@ -153,8 +154,8 @@ impl Solver {
                     return Err(());
                 }
                 self.curr_target_area[ci] = Some(a0);
-                self.curr_min_area[ci] = a0;
-                self.curr_max_area[ci] = a0;
+                self.prop.curr_min_area[ci] = a0;
+                self.prop.curr_max_area[ci] = a0;
                 if self.curr_comp_sz[ci] > a0 {
                     return Err(());
                 }
@@ -162,8 +163,8 @@ impl Solver {
                 if local_min > local_max || self.curr_comp_sz[ci] > local_max {
                     return Err(());
                 }
-                self.curr_min_area[ci] = local_min;
-                self.curr_max_area[ci] = local_max;
+                self.prop.curr_min_area[ci] = local_min;
+                self.prop.curr_max_area[ci] = local_max;
                 // If local_min == local_max, we found an exact target!
                 if local_min == local_max {
                     self.curr_target_area[ci] = Some(local_min);
@@ -177,12 +178,12 @@ impl Solver {
         self.can_grow_buf.clear();
         self.can_grow_buf.resize(num_comp, false);
         // Reuse growth_edges allocations
-        self.growth_edges.truncate(num_comp);
-        for v in &mut self.growth_edges {
+        self.prop.growth_edges.truncate(num_comp);
+        for v in &mut self.prop.growth_edges {
             v.clear();
         }
-        while self.growth_edges.len() < num_comp {
-            self.growth_edges.push(Vec::new());
+        while self.prop.growth_edges.len() < num_comp {
+            self.prop.growth_edges.push(Vec::new());
         }
         let mut same_area_ef = EdgeForcer::new();
 
@@ -216,7 +217,7 @@ impl Solver {
 
                 // Same-area merge: when distinct area sum = total cells,
                 // all same-target components must eventually be in one piece.
-                if self.same_area_groups {
+                if self.prop.same_area_groups {
                     if let (Some(a1), Some(a2)) =
                         (self.curr_target_area[ci1], self.curr_target_area[ci2])
                     {
@@ -231,11 +232,11 @@ impl Solver {
 
                 self.can_grow_buf[ci1] = true;
                 self.can_grow_buf[ci2] = true;
-                self.growth_edges[ci1].push(e);
-                self.growth_edges[ci2].push(e);
+                self.prop.growth_edges[ci1].push(e);
+                self.prop.growth_edges[ci2].push(e);
 
-                let limit1 = self.curr_max_area[ci1];
-                let limit2 = self.curr_max_area[ci2];
+                let limit1 = self.prop.curr_max_area[ci1];
+                let limit2 = self.prop.curr_max_area[ci2];
 
                 if (self.curr_comp_sz[ci1] >= limit1 || self.curr_comp_sz[ci2] >= limit2)
                     && !self.set_edge(e, EdgeState::Cut)
@@ -308,7 +309,7 @@ impl Solver {
         // === Rose exact piece count cap ===
         // If we know there are exactly K pieces, and K components are already sealed,
         // all remaining inter-component edges must be Cut (no more pieces allowed).
-        if let Some(k) = self.rose_exact_piece_count {
+        if let Some(k) = self.prop.rose_exact_piece_count {
             let sealed_count = self.sealed(num_comp).count();
             if sealed_count > k {
                 return Err(());
@@ -427,7 +428,7 @@ impl Solver {
                     if forbidden.contains(&self.curr_comp_sz[ci]) {
                         let mut unk_count = 0usize;
                         let mut last_unk = None;
-                        for &e in &self.growth_edges[ci] {
+                        for &e in &self.prop.growth_edges[ci] {
                             if self.edges[e] == EdgeState::Unknown {
                                 unk_count += 1;
                                 last_unk = Some(e);
@@ -445,9 +446,9 @@ impl Solver {
             progress = forbidden_uncut_ef.apply(self)? || progress;
 
             // Cache for edge selection heuristic (Proposal C)
-            self.cached_sealed_neighbor_sizes = Some(sealed_neighbor_sizes);
+            self.edge_selection.sealed_neighbor_sizes = Some(sealed_neighbor_sizes);
         } else {
-            self.cached_sealed_neighbor_sizes = None;
+            self.edge_selection.sealed_neighbor_sizes = None;
         }
         Ok(progress)
     }
@@ -570,7 +571,7 @@ impl Solver {
     /// For every pair of compass cells that are NOT yet in the same component,
     /// check if they are incompatible. If so:
     /// - If adjacent: force the edge between them to Cut
-    /// - If non-adjacent: add to manual_diffs
+    /// - If non-adjacent: add to diffs
     /// Returns the number of incompatibilities found.
     pub(crate) fn init_compass_incompatibility(&mut self) -> usize {
         // Collect all compass cells
@@ -607,9 +608,9 @@ impl Solver {
                             self.set_edge(eid, EdgeState::Cut);
                         }
                     } else {
-                        // Non-adjacent: add to manual_diffs
-                        self.manual_diffs.push((*ca, *cb));
-                        self.manual_diff_set.insert((*ca, *cb));
+                        // Non-adjacent: add to diffs
+                        self.pair_branch.diffs.push((*ca, *cb));
+                        self.pair_branch.diff_set.insert((*ca, *cb));
                     }
                 }
             }
@@ -671,7 +672,7 @@ impl Solver {
 
                 if counts[idx] == v {
                     // At limit: cut growth edges in this direction
-                    for &e in &self.growth_edges[ci] {
+                    for &e in &self.prop.growth_edges[ci] {
                         let (c1, c2) = self.grid.edge_cells(e);
                         let other = if self.curr_comp_id[c1] == ci { c2 } else { c1 };
                         let (pr, pc) = self.grid.cell_pos(other);
@@ -698,7 +699,7 @@ impl Solver {
                     if self.is_growing(ci) {
                         let mut dir_growth_count = 0usize;
                         let mut dir_last_edge: Option<EdgeId> = None;
-                        for &e in &self.growth_edges[ci] {
+                        for &e in &self.prop.growth_edges[ci] {
                             let (c1, c2) = self.grid.edge_cells(e);
                             let other = if self.curr_comp_id[c1] == ci { c2 } else { c1 };
                             let (pr, pc) = self.grid.cell_pos(other);
@@ -729,7 +730,7 @@ impl Solver {
                                         break;
                                     }
                                 } else {
-                                    let has_growth = self.growth_edges[ci].iter().any(|&e| {
+                                    let has_growth = self.prop.growth_edges[ci].iter().any(|&e| {
                                         let (c1, c2) = self.grid.edge_cells(e);
                                         let other =
                                             if self.curr_comp_id[c1] == ci { c2 } else { c1 };
@@ -838,7 +839,7 @@ impl Solver {
                 }
 
                 // Cut growth edges whose target cell is outside the bounding box
-                let to_cut: Vec<EdgeId> = self.growth_edges[ci]
+                let to_cut: Vec<EdgeId> = self.prop.growth_edges[ci]
                     .iter()
                     .filter(|&&e| {
                         if self.edges[e] != EdgeState::Unknown {
@@ -925,7 +926,7 @@ impl Solver {
                     }
                 } else {
                     // Growing component
-                    let max_possible = self.curr_max_area[ci];
+                    let max_possible = self.prop.curr_max_area[ci];
 
                     if self.puzzle.rules.boxy && cell_count < bbox_size && bbox_size > max_possible
                     {
@@ -1065,7 +1066,7 @@ impl Solver {
         // Diff clues: when one side is sealed, propagate target area to the other side
         let mut progress = false;
         let mut diff_ef = EdgeForcer::new();
-        for &(e, value) in &self.diff_clues {
+        for &(e, value) in &self.prop.diff_clues {
             if self.edges[e] != EdgeState::Cut {
                 continue;
             }
@@ -1094,8 +1095,8 @@ impl Solver {
                 continue;
             };
             let sealed_sz = self.curr_comp_sz[sealed_ci];
-            let min_area = self.curr_min_area[other_ci];
-            let max_area = self.curr_max_area[other_ci];
+            let min_area = self.prop.curr_min_area[other_ci];
+            let max_area = self.prop.curr_max_area[other_ci];
             let mut candidates: Vec<usize> = Vec::new();
             candidates.push(sealed_sz + value);
             if sealed_sz > value {
@@ -1121,7 +1122,7 @@ impl Solver {
                 // Do NOT set progress = true here — curr_target_area is recomputed
                 // each call, so this is not a persistent state change.
                 if self.curr_comp_sz[other_ci] == new_target {
-                    for &ge in &self.growth_edges[other_ci] {
+                    for &ge in &self.prop.growth_edges[other_ci] {
                         if self.edges[ge] == EdgeState::Unknown {
                             diff_ef.force_cut(ge);
                         }
@@ -1159,13 +1160,13 @@ impl Solver {
                 gec[ci1] += 1;
                 gec[ci2] += 1;
             }
-            self.cached_growth_edge_count = gec;
+            self.edge_selection.growth_edge_count = gec;
         }
 
         for ci in 0..num_comp {
             let target = self.curr_target_area[ci];
-            let min_a = self.curr_min_area[ci];
-            let max_a = self.curr_max_area[ci];
+            let min_a = self.prop.curr_min_area[ci];
+            let max_a = self.prop.curr_max_area[ci];
 
             if let Some(t) = target {
                 if self.curr_comp_sz[ci] < t && self.is_sealed(ci) {
@@ -1178,7 +1179,7 @@ impl Solver {
                 // Only check when nearly sealed (few growth options) to
                 // limit overhead. Skip during probing.
                 if !self.in_probing && self.is_growing(ci) && self.curr_comp_sz[ci] < t {
-                    let unk_growth = self.growth_edges[ci]
+                    let unk_growth = self.prop.growth_edges[ci]
                         .iter()
                         .filter(|&&e| self.edges[e] == EdgeState::Unknown)
                         .count();
@@ -1190,7 +1191,7 @@ impl Solver {
                     }
                 }
                 if self.curr_comp_sz[ci] == t && self.is_growing(ci) {
-                    let to_cut: Vec<EdgeId> = self.growth_edges[ci]
+                    let to_cut: Vec<EdgeId> = self.prop.growth_edges[ci]
                         .iter()
                         .filter(|&&e| self.edges[e] == EdgeState::Unknown)
                         .copied()
@@ -1208,7 +1209,7 @@ impl Solver {
                     return Err(());
                 }
                 if self.curr_comp_sz[ci] == max_a && self.is_growing(ci) {
-                    let to_cut: Vec<EdgeId> = self.growth_edges[ci]
+                    let to_cut: Vec<EdgeId> = self.prop.growth_edges[ci]
                         .iter()
                         .filter(|&&e| self.edges[e] == EdgeState::Unknown)
                         .copied()
@@ -1277,7 +1278,7 @@ impl Solver {
         // Manual DIFF constraint check: if two cells declared as DIFF
         // (from branching or compass incompatibility) have ended up in
         // the same component, that's a contradiction.
-        for &(d1, d2) in &self.manual_diffs {
+        for &(d1, d2) in &self.pair_branch.diffs {
             if self.curr_comp_id[d1] == self.curr_comp_id[d2] {
                 return Err(());
             }
@@ -1286,8 +1287,8 @@ impl Solver {
         // Manual SAME constraint check: if two cells declared as SAME
         // are in different components, verify they can still be connected
         // via Uncut+Unknown edges. If fully isolated, it's a contradiction.
-        for i in 0..self.manual_sames.len() {
-            let (s1, s2) = self.manual_sames[i];
+        for i in 0..self.pair_branch.sames.len() {
+            let (s1, s2) = self.pair_branch.sames[i];
             let ci1 = self.curr_comp_id[s1];
             let ci2 = self.curr_comp_id[s2];
             if ci1 == ci2 {
@@ -1334,10 +1335,10 @@ impl Solver {
         // Find connected regions of non-sealed cells via non-Cut edges.
         // For each region, verify it can accommodate the most demanding component.
         // Reuse comp_buf as visited (usize::MAX = unvisited).
-        self.comp_buf[..n].fill(usize::MAX);
+        self.prop.comp_buf[..n].fill(usize::MAX);
 
         for c in 0..n {
-            if !self.grid.cell_exists[c] || self.comp_buf[c] != usize::MAX {
+            if !self.grid.cell_exists[c] || self.prop.comp_buf[c] != usize::MAX {
                 continue;
             }
             let ci = self.curr_comp_id[c];
@@ -1350,12 +1351,12 @@ impl Solver {
             let mut region_max_min = 0usize;
             self.q_buf.clear();
             self.q_buf.push(c);
-            self.comp_buf[c] = 0;
+            self.prop.comp_buf[c] = 0;
             while let Some(cur) = self.q_buf.pop() {
                 region_size += 1;
                 let cur_ci = self.curr_comp_id[cur];
-                if cur_ci < num_comp && cur_ci < self.curr_min_area.len() {
-                    region_max_min = region_max_min.max(self.curr_min_area[cur_ci]);
+                if cur_ci < num_comp && cur_ci < self.prop.curr_min_area.len() {
+                    region_max_min = region_max_min.max(self.prop.curr_min_area[cur_ci]);
                 }
                 for eid in self.grid.cell_edges(cur).into_iter().flatten() {
                     if self.edges[eid] == EdgeState::Cut {
@@ -1363,14 +1364,14 @@ impl Solver {
                     }
                     let (c1, c2) = self.grid.edge_cells(eid);
                     let other = if c1 == cur { c2 } else { c1 };
-                    if !self.grid.cell_exists[other] || self.comp_buf[other] != usize::MAX {
+                    if !self.grid.cell_exists[other] || self.prop.comp_buf[other] != usize::MAX {
                         continue;
                     }
                     let oci = self.curr_comp_id[other];
                     if !self.is_growing(oci) {
                         continue;
                     }
-                    self.comp_buf[other] = 0;
+                    self.prop.comp_buf[other] = 0;
                     self.q_buf.push(other);
                 }
             }
@@ -1479,13 +1480,13 @@ impl Solver {
 
         // Find connected groups of non-covered, non-sealed cells
         // Reuse comp_buf as visited (already filled from Phase 1, re-fill)
-        self.comp_buf[..n].fill(usize::MAX);
+        self.prop.comp_buf[..n].fill(usize::MAX);
 
         // Compute max min_area among compass-covered components for threshold
         let mut max_compass_min = 0usize;
         for ci in 0..num_comp {
-            if self.is_growing(ci) && self.curr_min_area.len() > ci {
-                max_compass_min = max_compass_min.max(self.curr_min_area[ci]);
+            if self.is_growing(ci) && self.prop.curr_min_area.len() > ci {
+                max_compass_min = max_compass_min.max(self.prop.curr_min_area[ci]);
             }
         }
         if max_compass_min <= 1 {
@@ -1493,7 +1494,10 @@ impl Solver {
         }
 
         for c in 0..n {
-            if !self.grid.cell_exists[c] || compass_covered[c] || self.comp_buf[c] != usize::MAX {
+            if !self.grid.cell_exists[c]
+                || compass_covered[c]
+                || self.prop.comp_buf[c] != usize::MAX
+            {
                 continue;
             }
             let ci = self.curr_comp_id[c];
@@ -1505,7 +1509,7 @@ impl Solver {
             let mut group_size = 0usize;
             self.q_buf.clear();
             self.q_buf.push(c);
-            self.comp_buf[c] = 0;
+            self.prop.comp_buf[c] = 0;
             while let Some(cur) = self.q_buf.pop() {
                 group_size += 1;
                 for eid in self.grid.cell_edges(cur).into_iter().flatten() {
@@ -1516,7 +1520,7 @@ impl Solver {
                     let other = if c1 == cur { c2 } else { c1 };
                     if !self.grid.cell_exists[other]
                         || compass_covered[other]
-                        || self.comp_buf[other] != usize::MAX
+                        || self.prop.comp_buf[other] != usize::MAX
                     {
                         continue;
                     }
@@ -1524,7 +1528,7 @@ impl Solver {
                     if !self.is_growing(oci) {
                         continue;
                     }
-                    self.comp_buf[other] = 0;
+                    self.prop.comp_buf[other] = 0;
                     self.q_buf.push(other);
                 }
             }
@@ -1538,7 +1542,7 @@ impl Solver {
     }
 
     /// Check if two cells can be connected via Uncut+Unknown edges (BFS).
-    /// Used to verify manual_sames constraints: if no path exists, the SAME
+    /// Used to verify sames constraints: if no path exists, the SAME
     /// constraint can never be satisfied.
     fn can_connect_comps(&mut self, c1: CellId, c2: CellId) -> bool {
         let n = self.grid.num_cells();
@@ -1567,18 +1571,18 @@ impl Solver {
     }
 
     pub(crate) fn flood_fill_decided(&mut self, start: CellId) {
-        self.comp_buf[start] = start;
+        self.prop.comp_buf[start] = start;
         self.q_buf.clear();
         self.q_buf.push(start);
         while let Some(cur) = self.q_buf.pop() {
             for eid in self.grid.cell_edges(cur).into_iter().flatten() {
                 let (c1, c2) = self.grid.edge_cells(eid);
                 let other = if c1 == cur { c2 } else { c1 };
-                if !self.grid.cell_exists[other] || self.comp_buf[other] != usize::MAX {
+                if !self.grid.cell_exists[other] || self.prop.comp_buf[other] != usize::MAX {
                     continue;
                 }
                 if self.edges[eid] == EdgeState::Uncut {
-                    self.comp_buf[other] = start;
+                    self.prop.comp_buf[other] = start;
                     self.q_buf.push(other);
                 }
             }
@@ -1719,8 +1723,8 @@ impl Solver {
             if self.is_sealed(ci) {
                 continue;
             }
-            let max_a = self.curr_max_area[ci];
-            let min_a = self.curr_min_area[ci];
+            let max_a = self.prop.curr_max_area[ci];
+            let min_a = self.prop.curr_min_area[ci];
             if max_a > MAX_AREA_THRESHOLD {
                 continue;
             }
@@ -2144,7 +2148,7 @@ impl Solver {
 
     /// Returns Err if any group's anchors are disconnected.
     pub(crate) fn propagate_same_area_reachability(&mut self) -> Result<bool, ()> {
-        if !self.same_area_groups {
+        if !self.prop.same_area_groups {
             return Ok(false);
         }
 
@@ -2276,18 +2280,18 @@ mod tests {
         let v_edge = s.grid.v_edge(0, 0);
         let _ = s.set_edge(v_edge, EdgeState::Uncut);
 
-        s.comp_buf.fill(usize::MAX);
+        s.prop.comp_buf.fill(usize::MAX);
         s.flood_fill_decided(s.grid.cell_id(0, 0));
 
         // Cell (0,0) and (0,1) should have same component id
         assert_eq!(
-            s.comp_buf[s.grid.cell_id(0, 0)],
-            s.comp_buf[s.grid.cell_id(0, 1)]
+            s.prop.comp_buf[s.grid.cell_id(0, 0)],
+            s.prop.comp_buf[s.grid.cell_id(0, 1)]
         );
         // Cell (1,0) should be in a different component
         assert_ne!(
-            s.comp_buf[s.grid.cell_id(0, 0)],
-            s.comp_buf[s.grid.cell_id(1, 0)]
+            s.prop.comp_buf[s.grid.cell_id(0, 0)],
+            s.prop.comp_buf[s.grid.cell_id(1, 0)]
         );
     }
 }

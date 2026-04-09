@@ -20,8 +20,8 @@ use std::collections::HashSet;
 #[derive(Clone, Copy, Debug)]
 pub struct Snapshot {
     pub edges: usize,
-    pub manual_diffs: usize,
-    pub manual_sames: usize,
+    pub diffs: usize,
+    pub sames: usize,
 }
 
 pub struct Solver {
@@ -39,8 +39,7 @@ pub struct Solver {
     pub(crate) eff_max_area: usize,
     // Piece-based search state
     pub(crate) total_cells: usize,
-    pub(crate) shape_transforms: Vec<Vec<Vec<(isize, isize)>>>,
-    pub(crate) shape_bank_canonicals: Vec<Shape>,
+    pub(crate) shape_search: shapes::ShapeSearchState,
     // Progress tracking
     pub(crate) node_count: u64,
     pub(crate) total_unknown: usize,
@@ -50,32 +49,15 @@ pub struct Solver {
     pub(crate) curr_comp_id: Vec<usize>,
     pub(crate) curr_comp_sz: Vec<usize>,
     pub(crate) curr_target_area: Vec<Option<usize>>,
-    pub(crate) curr_min_area: Vec<usize>,
-    pub(crate) curr_max_area: Vec<usize>,
-    // Reusable buffers for propagation
-    pub(crate) comp_buf: Vec<usize>,
-    pub(crate) comp_buf2: Vec<usize>,
+    // Reusable buffers shared outside propagation
     pub(crate) q_buf: Vec<usize>,
     pub(crate) can_grow_buf: Vec<bool>,
-    // Dedup for match coupled solver: tracks seen piece1 cell sets
-    pub(crate) seen_partitions: HashSet<Vec<CellId>>,
-    // Whether shape bank was auto-populated (affects solve strategy)
-    pub(crate) auto_populated_bank: bool,
+    pub(crate) prop: propagation::PropagationState,
+    pub(crate) match_coupled: match_coupled::MatchCoupledState,
     // Pre-calculated cell clue info
     pub(crate) cell_clues_indexed: Vec<Vec<usize>>, // indices into self.puzzle.cell_clues
     pub(crate) has_any_clue: Vec<bool>,
-    // Optimization: when sum of distinct area values equals total_cells,
-    // all cells with the same area number must be in the same piece.
-    pub(crate) same_area_groups: bool,
-    // Cached from last propagate_area_bounds() for edge selection heuristic
-    pub(crate) cached_sealed_neighbor_sizes: Option<Vec<HashSet<usize>>>,
-    pub(crate) cached_growth_edge_count: Vec<usize>,
-    // Pre-extracted diff clues: (edge_id, value)
-    pub(crate) diff_clues: Vec<(EdgeId, usize)>,
-    // All edge IDs with any clue (inequality, diff, gemini, delta) — always Cut
-    pub(crate) clue_cut_edges: Vec<EdgeId>,
-    // Vertices with watchtower clues (static, for edge selection heuristic)
-    pub(crate) watchtower_vertices: HashSet<VertexId>,
+    pub(crate) edge_selection: edges::EdgeSelectionCache,
     // Bitset of rose window symbols present in the puzzle (bit i = symbol i exists)
     pub(crate) rose_bits_all: u8,
     // Pre-computed rose symbol per cell (u8::MAX = no rose symbol, static)
@@ -84,27 +66,13 @@ pub struct Solver {
     pub(crate) rose_visited: Vec<bool>,
     // Cells per component (populated by build_components, used by sub-propagators)
     pub(crate) comp_cells: Vec<Vec<CellId>>,
-    // Growth edges per component (populated by build_components)
-    pub(crate) growth_edges: Vec<Vec<EdgeId>>,
     // Recursion guard: prevents probing from running inside a probe's propagation
     pub(crate) in_probing: bool,
     // Pre-computed clue presence flags (set once in new())
-    pub(crate) has_palisade_clue: bool,
     pub(crate) has_compass_clue: bool,
     // Cell-pair constraint layer (None if no rose symbols)
     pub(crate) pair_layer: Option<pair::CellPairLayer>,
-    // Exact piece count deduced from rose window: if all rose types have the same
-    // count N, then exactly N pieces are needed (each piece gets one of each type).
-    pub(crate) rose_exact_piece_count: Option<usize>,
-    // Reusable BFS buffer for path-finding (pair branching)
-    pub(crate) bfs_prev: Vec<Option<(CellId, EdgeId)>>,
-    // Manual DIFF constraints from branching (c1, c2)
-    pub(crate) manual_diffs: Vec<(CellId, CellId)>,
-    // Precomputed set of manual DIFF pairs for fast lookup
-    pub(crate) manual_diff_set: HashSet<(CellId, CellId)>,
-    // Manual SAME constraints from branching (c1, c2 must be in same piece)
-    pub(crate) manual_sames: Vec<(CellId, CellId)>,
-    pub(crate) manual_same_set: HashSet<(CellId, CellId)>,
+    pub(crate) pair_branch: pair::PairBranchState,
     // Search recursion depth to limit compass branching to top level only
     pub(crate) search_depth: usize,
     // Solver start time for elapsed-time reporting
@@ -218,8 +186,7 @@ impl Solver {
             eff_min_area: 1,
             eff_max_area: usize::MAX,
             total_cells: 0,
-            shape_transforms: Vec::new(),
-            shape_bank_canonicals: Vec::new(),
+            shape_search: shapes::ShapeSearchState::new(),
             node_count: 0,
             total_unknown: 0,
             progress: progress::Progress::new(),
@@ -227,37 +194,27 @@ impl Solver {
             curr_comp_id: Vec::new(),
             curr_comp_sz: Vec::new(),
             curr_target_area: Vec::new(),
-            curr_min_area: Vec::new(),
-            curr_max_area: Vec::new(),
-            comp_buf: vec![usize::MAX; nc],
-            comp_buf2: Vec::new(),
             q_buf: Vec::with_capacity(nc),
             can_grow_buf: Vec::new(),
-            seen_partitions: HashSet::new(),
-            auto_populated_bank: false,
+            prop: propagation::PropagationState::new(
+                has_palisade_clue,
+                diff_clues,
+                false,
+                rose_exact_piece_count,
+                nc,
+            ),
+            match_coupled: match_coupled::MatchCoupledState::new(),
             cell_clues_indexed,
             has_any_clue,
-            same_area_groups: false,
-            cached_sealed_neighbor_sizes: None,
-            cached_growth_edge_count: Vec::new(),
-            diff_clues,
-            clue_cut_edges,
-            watchtower_vertices,
+            edge_selection: edges::EdgeSelectionCache::new(clue_cut_edges, watchtower_vertices),
             rose_bits_all,
             cell_rose_sym,
             rose_visited,
             comp_cells: Vec::new(),
-            growth_edges: Vec::new(),
             in_probing: false,
-            has_palisade_clue,
             has_compass_clue,
             pair_layer: None,
-            rose_exact_piece_count,
-            bfs_prev: Vec::new(),
-            manual_diffs: Vec::new(),
-            manual_diff_set: HashSet::new(),
-            manual_sames: Vec::new(),
-            manual_same_set: HashSet::new(),
+            pair_branch: pair::PairBranchState::new(),
             search_depth: 0,
             start_time: std::time::Instant::now(),
             debug_known_solution: Vec::new(),
@@ -276,8 +233,8 @@ impl Solver {
     pub(crate) fn snapshot(&self) -> Snapshot {
         Snapshot {
             edges: self.changed.len(),
-            manual_diffs: self.manual_diffs.len(),
-            manual_sames: self.manual_sames.len(),
+            diffs: self.pair_branch.diffs.len(),
+            sames: self.pair_branch.sames.len(),
         }
     }
 
@@ -301,8 +258,8 @@ impl Solver {
                     }
                 }
             }
-            self.same_area_groups = distinct_sum == self.total_cells;
-            if self.same_area_groups {
+            self.prop.same_area_groups = distinct_sum == self.total_cells;
+            if self.prop.same_area_groups {
                 eprintln!(
                     "same-area-groups optimization: {} distinct areas sum to {} = total cells",
                     seen.len(),
@@ -319,7 +276,7 @@ impl Solver {
             .count();
 
         // Rose exact piece count: if type counts differ, no solution.
-        if self.rose_bits_all != 0 && self.rose_exact_piece_count.is_none() {
+        if self.rose_bits_all != 0 && self.prop.rose_exact_piece_count.is_none() {
             return 0;
         }
 
@@ -373,7 +330,7 @@ impl Solver {
         }
 
         // Pre-search compass incompatibility: detect incompatible compass pairs
-        // and force edge cuts or add manual_diffs before search begins.
+        // and force edge cuts or add diffs before search begins.
         if self.has_compass_clue {
             let n_incompat = self.init_compass_incompatibility();
             if n_incompat > 0 {
@@ -449,7 +406,7 @@ impl Solver {
         }
         if !remove_indices.is_empty() {
             // Rebuild watchtower_vertices set
-            self.watchtower_vertices = self
+            self.edge_selection.watchtower_vertices = self
                 .puzzle
                 .vertex_clues
                 .iter()

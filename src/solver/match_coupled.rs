@@ -2,6 +2,20 @@ use super::Solver;
 use crate::types::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 
+/// State exclusive to the match-coupled solver (2-piece symmetric search).
+pub(crate) struct MatchCoupledState {
+    /// Seen piece1 cell sets for deduplication of bipartite solutions.
+    pub(crate) seen_partitions: HashSet<Vec<CellId>>,
+}
+
+impl MatchCoupledState {
+    pub(crate) fn new() -> Self {
+        Self {
+            seen_partitions: HashSet::new(),
+        }
+    }
+}
+
 impl Solver {
     /// Build adjacency list from edges that are NOT Cut (Unknown or Uncut),
     /// only between existing cells.
@@ -28,7 +42,7 @@ impl Solver {
         // Dedup: skip if this piece1 partition was already recorded
         let mut key: Vec<CellId> = piece1.to_vec();
         key.sort();
-        if !self.seen_partitions.insert(key) {
+        if !self.match_coupled.seen_partitions.insert(key) {
             self.restore(snap);
             return;
         }
@@ -126,11 +140,19 @@ impl Solver {
                         continue;
                     }
 
-                    let Some((fwd, mut in_p1, mut in_p2, init_size)) =
-                        self.try_init_coupled_partition(
-                            rot, flip, dst, sa_r, sa_c,
-                            anchor1, anchor2, target,
-                            &pos_to_cell, &existing_cells, n,
+                    let Some((fwd, mut in_p1, mut in_p2, init_size)) = self
+                        .try_init_coupled_partition(
+                            rot,
+                            flip,
+                            dst,
+                            sa_r,
+                            sa_c,
+                            anchor1,
+                            anchor2,
+                            target,
+                            &pos_to_cell,
+                            &existing_cells,
+                            n,
                         )
                     else {
                         continue;
@@ -141,10 +163,16 @@ impl Solver {
                         // piece1 already complete — verify connectivity + coverage
                         let all_covered = existing_cells.iter().all(|&c| in_p1[c] || in_p2[c]);
                         if all_covered && Self::is_connected_set(&adj, &in_p1, &existing_cells) {
-                            let p1: Vec<CellId> =
-                                existing_cells.iter().filter(|&&c| in_p1[c]).copied().collect();
-                            let p2: Vec<CellId> =
-                                existing_cells.iter().filter(|&&c| in_p2[c]).copied().collect();
+                            let p1: Vec<CellId> = existing_cells
+                                .iter()
+                                .filter(|&&c| in_p1[c])
+                                .copied()
+                                .collect();
+                            let p2: Vec<CellId> = existing_cells
+                                .iter()
+                                .filter(|&&c| in_p2[c])
+                                .copied()
+                                .collect();
                             self.record_bipartite_solution(&p1, &p2);
                             if self.solution_count >= 2 {
                                 return;
