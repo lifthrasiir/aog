@@ -40,6 +40,10 @@ struct CellToken {
     text: String,
 }
 
+fn is_vertex_char(c: char) -> bool {
+    matches!(c, '+' | '!' | '@' | '#' | '$')
+}
+
 impl Parser {
     pub fn parse<R: std::io::BufRead>(&mut self, reader: R) -> Result<(), ParseError> {
         let mut lines = Vec::new();
@@ -62,7 +66,10 @@ impl Parser {
             .iter()
             .position(|l| {
                 let t = l.trim_start();
-                t.len() >= 3 && t.starts_with('+') && l.ends_with('+')
+                t.len() >= 3
+                    && t.chars().next().map_or(false, is_vertex_char)
+                    && l.chars().next_back().map_or(false, is_vertex_char)
+                    && t.contains('+')
             })
             .ok_or_else(|| ParseError("no grid found".into()))?;
 
@@ -70,7 +77,11 @@ impl Parser {
         for i in self.grid_start..self.lines.len() {
             let l = &self.lines[i];
             let t = l.trim_start();
-            if !t.is_empty() && t.starts_with('+') && l.ends_with('+') {
+            if !t.is_empty()
+                && t.chars().next().map_or(false, is_vertex_char)
+                && l.chars().next_back().map_or(false, is_vertex_char)
+                && t.contains('+')
+            {
                 self.grid_end = i;
             } else if t.starts_with('|') && l.ends_with('|') {
                 self.grid_end = i;
@@ -286,7 +297,7 @@ impl Parser {
         for i in self.grid_start..=self.grid_end {
             let line = self.lines[i].clone();
             let t = line.trim_start();
-            if t.is_empty() || !t.starts_with('+') {
+            if t.is_empty() || !t.chars().next().map_or(false, is_vertex_char) {
                 continue;
             }
 
@@ -352,9 +363,9 @@ impl Parser {
         for i in self.grid_start..=self.grid_end {
             let line = &self.lines[i];
             let t = line.trim_start();
-            if t.starts_with('+') {
+            if t.chars().next().map_or(false, is_vertex_char) {
                 for (col, ch) in line.char_indices() {
-                    if matches!(ch, '+' | '!' | '@' | '#' | '$') {
+                    if is_vertex_char(ch) {
                         cols_set.insert(col);
                     }
                 }
