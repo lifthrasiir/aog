@@ -1,4 +1,4 @@
-use super::Solver;
+use super::super::Solver;
 use crate::types::*;
 
 impl Solver {
@@ -93,8 +93,8 @@ impl Solver {
             seen_root[r] = true;
 
             match root_odd[r] {
-                0 => num_loops += 1,   // all vertices even degree → loop
-                2 => num_open += 1,    // exactly 2 odd-degree vertices → path
+                0 => num_loops += 1, // all vertices even degree → loop
+                2 => num_open += 1,  // exactly 2 odd-degree vertices → path
                 _ => {
                     // Branching (3+ odd-degree vertices) — shouldn't happen
                     // with @ + loopy but handle gracefully

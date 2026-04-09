@@ -1,4 +1,4 @@
-use super::Solver;
+use super::super::Solver;
 use crate::types::*;
 
 impl Solver {
@@ -314,7 +314,7 @@ mod tests {
         // Cut all other edges from A to C and B to C
         let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut); // (0,1)-(1,1)
         let _ = s.set_edge(s.grid.v_edge(1, 0), EdgeState::Cut); // (1,0)-(1,1)
-        // h_edge(0,0) between (0,0) and (1,0) stays Unknown → bridge
+                                                                 // h_edge(0,0) between (0,0) and (1,0) stays Unknown → bridge
 
         s.propagate_area_bounds().ok();
 
@@ -328,7 +328,11 @@ mod tests {
             .iter()
             .filter(|&&e| s.edges[e] == EdgeState::Unknown)
             .collect();
-        assert_eq!(unk_from_b.len(), 1, "B should have exactly 1 unknown growth edge");
+        assert_eq!(
+            unk_from_b.len(),
+            1,
+            "B should have exactly 1 unknown growth edge"
+        );
 
         let bridge = *unk_from_b[0];
 
@@ -440,8 +444,8 @@ mod tests {
         // except one: the edge between (0,1) and (1,1).
         let _ = s.set_edge(s.grid.h_edge(0, 0), EdgeState::Cut); // between (0,0) and (1,0)
         let _ = s.set_edge(s.grid.h_edge(0, 1), EdgeState::Cut); // between (0,1) and (1,1)
-        // Wait, we need one growth edge. Let me use (0,1)-(0,2) as the single growth edge.
-        // Keep v_edge(0,1) between (0,1) and (0,2) as Unknown.
+                                                                 // Wait, we need one growth edge. Let me use (0,1)-(0,2) as the single growth edge.
+                                                                 // Keep v_edge(0,1) between (0,1) and (0,2) as Unknown.
 
         // Also cut (0,0)-(1,0) to prevent growth downward
         // Already done above.
@@ -458,7 +462,11 @@ mod tests {
             .filter(|&&e| s.edges[e] == EdgeState::Unknown)
             .copied()
             .collect();
-        assert_eq!(unk_edges.len(), 1, "should have exactly 1 unknown growth edge");
+        assert_eq!(
+            unk_edges.len(),
+            1,
+            "should have exactly 1 unknown growth edge"
+        );
 
         let single_edge = unk_edges[0];
         let result = s.propagate_dual_connectivity();

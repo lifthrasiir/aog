@@ -1,4 +1,4 @@
-use super::Solver;
+use super::super::Solver;
 use crate::polyomino::{self, canonical};
 use crate::types::*;
 use std::collections::HashSet;

@@ -1,4 +1,4 @@
-use super::{EdgeForcer, Solver};
+use super::super::{EdgeForcer, Solver};
 use crate::polyomino::Rotation;
 use crate::types::*;
 

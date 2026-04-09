@@ -1,3 +1,14 @@
+mod area;
+mod bricky_loopy;
+mod compass;
+mod delta_gemini;
+mod dual;
+mod loop_closure;
+mod palisade;
+mod rose;
+mod shape;
+mod watchtower;
+
 use super::Solver;
 use crate::types::*;
 
@@ -52,8 +63,7 @@ impl Solver {
             );
             run_prop!(
                 "loop_closure",
-                !self.in_probing
-                    && self.rose_exact_piece_count.map_or(false, |p| p >= 2),
+                !self.in_probing && self.rose_exact_piece_count.map_or(false, |p| p >= 2),
                 self.propagate_loop_closure()
             );
             run_prop!(
@@ -214,9 +224,7 @@ impl Solver {
 
                     for &v1 in &vals {
                         for &v2 in &vals {
-                            let ok = self.probe(|s| {
-                                s.set_edge(e1, v1) && s.set_edge(e2, v2)
-                            });
+                            let ok = self.probe(|s| s.set_edge(e1, v1) && s.set_edge(e2, v2));
 
                             if ok {
                                 ok_count += 1;

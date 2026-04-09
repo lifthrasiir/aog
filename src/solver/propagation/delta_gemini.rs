@@ -1,4 +1,4 @@
-use super::Solver;
+use super::super::Solver;
 use crate::types::*;
 
 impl Solver {

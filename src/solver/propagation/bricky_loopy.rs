@@ -1,4 +1,4 @@
-use super::Solver;
+use super::super::Solver;
 use crate::types::*;
 
 impl Solver {
@@ -52,7 +52,8 @@ impl Solver {
                             } else {
                                 (r_e, c_e + 1)
                             };
-                            let other_cut: usize = self.grid
+                            let other_cut: usize = self
+                                .grid
                                 .vertex_edges(ovi, ovj)
                                 .into_iter()
                                 .flatten()
@@ -60,14 +61,10 @@ impl Solver {
                                 .count();
                             // Check if the other vertex has a watchtower
                             // constraint that limits cuts to exactly 2
-                            let other_clue = self
-                                .puzzle
-                                .vertex_clues
-                                .iter()
-                                .find(|cl| {
-                                    let (vi, vj) = self.grid.vertex_pos(cl.vertex);
-                                    vi == ovi && vj == ovj
-                                });
+                            let other_clue = self.puzzle.vertex_clues.iter().find(|cl| {
+                                let (vi, vj) = self.grid.vertex_pos(cl.vertex);
+                                vi == ovi && vj == ovj
+                            });
                             if let Some(cl) = other_clue {
                                 if other_cut >= cl.value {
                                     blocked += 1;

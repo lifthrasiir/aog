@@ -1,4 +1,4 @@
-use super::{EdgeForcer, Solver};
+use super::super::{EdgeForcer, Solver};
 use crate::types::*;
 use std::collections::VecDeque;
 
@@ -104,12 +104,25 @@ impl Solver {
                     let (pr, pc) = self.grid.cell_pos(c);
                     let dr = pr as isize - cri;
                     let dc = pc as isize - cci;
-                    if dr < 0 { counts[0] += 1; }
-                    if dr > 0 { counts[1] += 1; }
-                    if dc > 0 { counts[2] += 1; }
-                    if dc < 0 { counts[3] += 1; }
+                    if dr < 0 {
+                        counts[0] += 1;
+                    }
+                    if dr > 0 {
+                        counts[1] += 1;
+                    }
+                    if dc > 0 {
+                        counts[2] += 1;
+                    }
+                    if dc < 0 {
+                        counts[3] += 1;
+                    }
                 }
-                for &(val, idx) in &[(compass.n, 0usize), (compass.s, 1), (compass.e, 2), (compass.w, 3)] {
+                for &(val, idx) in &[
+                    (compass.n, 0usize),
+                    (compass.s, 1),
+                    (compass.e, 2),
+                    (compass.w, 3),
+                ] {
                     let Some(v) = val else { continue };
                     if counts[idx] < v {
                         unsatisfied.push((idx, v, cri, cci));
@@ -135,10 +148,14 @@ impl Solver {
             }
             while let Some(cur) = queue.pop_front() {
                 for eid in self.grid.cell_edges(cur).into_iter().flatten() {
-                    if self.edges[eid] == EdgeState::Cut { continue; }
+                    if self.edges[eid] == EdgeState::Cut {
+                        continue;
+                    }
                     let (c1, c2) = self.grid.edge_cells(eid);
                     let other = if c1 == cur { c2 } else { c1 };
-                    if !self.grid.cell_exists[other] { continue; }
+                    if !self.grid.cell_exists[other] {
+                        continue;
+                    }
                     if local_id[other] == usize::MAX {
                         local_id[other] = local_cells.len();
                         local_cells.push(other);
@@ -155,16 +172,19 @@ impl Solver {
             // Direction-reachability contradiction check.
             // If total reachable cells in an unsatisfied direction < target → contradiction.
             for &(dir_idx, v, cri, cci) in &unsatisfied {
-                let reachable_dir = local_cells.iter().filter(|&&c| {
-                    let (pr, pc) = self.grid.cell_pos(c);
-                    match dir_idx {
-                        0 => (pr as isize) < cri,
-                        1 => (pr as isize) > cri,
-                        2 => (pc as isize) > cci,
-                        3 => (pc as isize) < cci,
-                        _ => false,
-                    }
-                }).count();
+                let reachable_dir = local_cells
+                    .iter()
+                    .filter(|&&c| {
+                        let (pr, pc) = self.grid.cell_pos(c);
+                        match dir_idx {
+                            0 => (pr as isize) < cri,
+                            1 => (pr as isize) > cri,
+                            2 => (pc as isize) > cci,
+                            3 => (pc as isize) < cci,
+                            _ => false,
+                        }
+                    })
+                    .count();
                 if reachable_dir < v {
                     return Err(());
                 }
@@ -174,11 +194,15 @@ impl Solver {
             let mut adj: Vec<Vec<(usize, EdgeId)>> = vec![Vec::new(); n_local];
             for (li, &c) in local_cells.iter().enumerate() {
                 for eid in self.grid.cell_edges(c).into_iter().flatten() {
-                    if self.edges[eid] == EdgeState::Cut { continue; }
+                    if self.edges[eid] == EdgeState::Cut {
+                        continue;
+                    }
                     let (c1, c2) = self.grid.edge_cells(eid);
                     let other = if c1 == c { c2 } else { c1 };
                     let lj = local_id[other];
-                    if lj == usize::MAX { continue; }
+                    if lj == usize::MAX {
+                        continue;
+                    }
                     adj[li].push((lj, eid));
                 }
             }
@@ -204,7 +228,9 @@ impl Solver {
                 }
                 while let Some(u) = bfs.pop_front() {
                     for &(v, eid) in &adj[u] {
-                        if eid == bridge_eid { continue; }
+                        if eid == bridge_eid {
+                            continue;
+                        }
                         if !ci_side[v] {
                             ci_side[v] = true;
                             bfs.push_back(v);
@@ -234,7 +260,11 @@ impl Solver {
                             _ => false,
                         };
                         if in_dir {
-                            if ci_side[i] { ci_side_count += 1; } else { other_side_count += 1; }
+                            if ci_side[i] {
+                                ci_side_count += 1;
+                            } else {
+                                other_side_count += 1;
+                            }
                         }
                     }
                     if ci_side_count < v && other_side_count > 0 {
@@ -270,7 +300,9 @@ impl Solver {
                 }
                 while let Some(u) = fc_bfs.pop_front() {
                     for &(vj, eid) in &adj[u] {
-                        if is_fresh_ci[vj] { continue; }
+                        if is_fresh_ci[vj] {
+                            continue;
+                        }
                         if self.edges[eid] == EdgeState::Uncut {
                             is_fresh_ci[vj] = true;
                             fc_bfs.push_back(vj);
@@ -287,11 +319,15 @@ impl Solver {
                 let mut bfs: VecDeque<usize> = VecDeque::new();
 
                 for li in 0..n_local {
-                    if is_fresh_ci[li] { continue; }
+                    if is_fresh_ci[li] {
+                        continue;
+                    }
                     let c = local_cells[li];
                     // Only consider unassigned cells as direction targets to avoid
                     // false "only 1 gateway" conclusions via incompatible components.
-                    if self.curr_comp_id[c] != usize::MAX { continue; }
+                    if self.curr_comp_id[c] != usize::MAX {
+                        continue;
+                    }
                     let (pr, pc) = self.grid.cell_pos(c);
                     let in_dir = match dir_idx {
                         0 => (pr as isize) < cri,
@@ -313,9 +349,15 @@ impl Solver {
                 // BFS through non-CI unassigned cells
                 while let Some(u) = bfs.pop_front() {
                     for &(vj, _eid) in &adj[u] {
-                        if visited_local[vj] { continue; }
-                        if is_fresh_ci[vj] { continue; }
-                        if self.curr_comp_id[local_cells[vj]] != usize::MAX { continue; }
+                        if visited_local[vj] {
+                            continue;
+                        }
+                        if is_fresh_ci[vj] {
+                            continue;
+                        }
+                        if self.curr_comp_id[local_cells[vj]] != usize::MAX {
+                            continue;
+                        }
                         visited_local[vj] = true;
                         bfs.push_back(vj);
                     }
@@ -324,10 +366,16 @@ impl Solver {
                 // Collect Unknown edges from CI to visited non-CI cells
                 let mut gateway_edges: Vec<EdgeId> = Vec::new();
                 for li in 0..n_local {
-                    if !is_fresh_ci[li] { continue; }
+                    if !is_fresh_ci[li] {
+                        continue;
+                    }
                     for &(vj, eid) in &adj[li] {
-                        if !visited_local[vj] { continue; }
-                        if self.edges[eid] != EdgeState::Unknown { continue; }
+                        if !visited_local[vj] {
+                            continue;
+                        }
+                        if self.edges[eid] != EdgeState::Unknown {
+                            continue;
+                        }
                         gateway_edges.push(eid);
                     }
                 }

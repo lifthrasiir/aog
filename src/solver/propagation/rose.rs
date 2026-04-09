@@ -1,4 +1,4 @@
-use super::Solver;
+use super::super::Solver;
 use crate::types::*;
 use crate::uf::ParityUF;
 
@@ -102,7 +102,6 @@ impl Solver {
         // Only check components where cutting a growth edge might disconnect a required type.
         // Skip components with many unknown growth edges (cutting one rarely disconnects).
         for ci in self.growing(num_comp).collect::<Vec<_>>() {
-
             let comp_rose = comp_rose_arr[ci];
             let missing = self.rose_bits_all & !comp_rose;
             if missing == 0 {
@@ -121,8 +120,7 @@ impl Solver {
             }
 
             for e in unknown_edges {
-                let reachable_without =
-                    self.bfs_reachable_rose_types(ci, comp_rose, Some(e));
+                let reachable_without = self.bfs_reachable_rose_types(ci, comp_rose, Some(e));
                 if (reachable_without & missing) != missing {
                     if !self.set_edge(e, EdgeState::Uncut) {
                         return Err(());
@@ -134,7 +132,6 @@ impl Solver {
 
         // --- Phase 2: Two-level restricted reachability + single-growth-edge forcing ---
         for ci in self.growing(num_comp).collect::<Vec<_>>() {
-
             let comp_rose = comp_rose_arr[ci];
             let missing = self.rose_bits_all & !comp_rose;
             if missing == 0 {
@@ -180,7 +177,6 @@ impl Solver {
         }
         let num_comp = self.curr_comp_sz.len();
         for ci in self.growing(num_comp).collect::<Vec<_>>() {
-
             let mut comp_rose: u8 = 0;
             for &c in &self.comp_cells[ci] {
                 let sym = self.cell_rose_sym[c];
@@ -233,10 +229,7 @@ impl Solver {
     /// Detects contradictions (parity conflict) and forces Cut on unknown edges
     /// where both endpoints are already determined to be in different pieces.
     pub(crate) fn propagate_parity(&mut self) -> Result<bool, ()> {
-        if self.rose_bits_all == 0
-            && self.manual_diffs.is_empty()
-            && self.manual_sames.is_empty()
-        {
+        if self.rose_bits_all == 0 && self.manual_diffs.is_empty() && self.manual_sames.is_empty() {
             return Ok(false);
         }
 
@@ -282,7 +275,11 @@ impl Solver {
             let rel = match self.edges[e] {
                 EdgeState::Uncut => 0u8,
                 EdgeState::Cut => {
-                    if two_piece { 1u8 } else { continue }
+                    if two_piece {
+                        1u8
+                    } else {
+                        continue;
+                    }
                 }
                 EdgeState::Unknown => continue,
             };

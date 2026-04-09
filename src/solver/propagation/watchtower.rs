@@ -1,4 +1,4 @@
-use super::{EdgeForcer, Solver};
+use super::super::{EdgeForcer, Solver};
 use crate::types::*;
 use crate::uf::ParityUF;
 use std::collections::HashSet;
@@ -45,10 +45,7 @@ impl Solver {
 
                     let comp_set: HashSet<usize> =
                         cells.iter().map(|&c| self.curr_comp_id[c]).collect();
-                    let num_sealed = comp_set
-                        .iter()
-                        .filter(|&&ci| self.is_sealed(ci))
-                        .count();
+                    let num_sealed = comp_set.iter().filter(|&&ci| self.is_sealed(ci)).count();
                     let num_growing = comp_set.len() - num_sealed;
 
                     let min_distinct = num_sealed + if num_growing > 0 { 1 } else { 0 };

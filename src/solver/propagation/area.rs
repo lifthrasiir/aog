@@ -1,4 +1,4 @@
-use super::{EdgeForcer, Solver};
+use super::super::{EdgeForcer, Solver};
 use crate::types::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 
