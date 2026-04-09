@@ -11,6 +11,12 @@ impl Solver {
     ///   - N=2..3 (tree): pieces = 1 + k
     ///   - N=1: always 1 piece (no edges to propagate)
     ///
+    /// value=2 and value=3 on cycles allow more than the minimum cuts because
+    /// a piece reaching the vertex via two different paths (double-touching)
+    /// is counted once. value=4 on cycles also allows k=3 or k=4 since both
+    /// give at least 4 pieces when double-touching. Only value=1 enforces
+    /// exact cut counts on cycles.
+    ///
     /// value=v constrains the required number of cut edges accordingly.
     pub(crate) fn propagate_watchtower(&mut self) -> Result<bool, ()> {
         if self.puzzle.vertex_clues.is_empty() {
@@ -55,6 +61,18 @@ impl Solver {
                     let max_distinct = comp_set.len();
 
                     let is_err = value < min_distinct || value > max_distinct;
+                    tracing::debug!(
+                        vertex = ?(vi, vj),
+                        value,
+                        n,
+                        comp_distinct = comp_set.len(),
+                        num_sealed,
+                        num_growing,
+                        min_distinct,
+                        max_distinct,
+                        is_err,
+                        "watchtower comp-id check"
+                    );
 
                     let mut forced_cuts = Vec::new();
                     if max_distinct == value && comp_set.len() > 1 {
@@ -97,7 +115,7 @@ impl Solver {
         // === Edge-based pass (original logic) ===
 
         // Collect constraints upfront to avoid borrow conflicts
-        let constraints: Vec<(usize, Vec<EdgeId>, bool)> = self
+        let constraints: Vec<(usize, usize, usize, Vec<EdgeId>, bool)> = self
             .puzzle
             .vertex_clues
             .iter()
@@ -119,11 +137,11 @@ impl Solver {
                 }
                 if value > n {
                     // More pieces required than cells exist → impossible
-                    return Some((value, vec![], false));
+                    return Some((vi, vj, value, vec![], false));
                 }
                 if n == 1 {
                     // value > 1 with only 1 cell → impossible
-                    return Some((value, vec![], false));
+                    return Some((vi, vj, value, vec![], false));
                 }
 
                 // Collect internal edges between adjacent existing cells
@@ -139,13 +157,18 @@ impl Solver {
                 }
 
                 let is_cycle = n == 4 && edge_ids.len() == 4;
-                Some((value, edge_ids, is_cycle))
+                Some((vi, vj, value, edge_ids, is_cycle))
             })
             .collect();
 
-        for (value, edge_ids, is_cycle) in constraints {
+        for (vi, vj, value, edge_ids, is_cycle) in constraints {
             // Empty edges with value > 1 signals an impossibility (caught above)
             if edge_ids.is_empty() && value > 1 {
+                tracing::debug!(
+                    vertex = ?(vi, vj),
+                    value,
+                    "watchtower edge-based: empty edges with value > 1"
+                );
                 return Err(());
             }
             if edge_ids.is_empty() {
@@ -163,9 +186,23 @@ impl Solver {
             }
 
             if is_cycle {
-                // 4 cells, 4 edges, one cycle: pieces = max(1, k)
+                // 4 cells, 4 edges, one cycle: pieces = max(1, k).
+                // value=1: force no cuts (k ≤ 1). Exact enforcement because
+                //   k ≥ 2 always gives ≥ 2 pieces.
+                // value=2: lower bound only (k ≥ 2). Double-touching allows
+                //   k=3,4 to still give 2 pieces.
+                // value=3: lower bound only (k ≥ 3). Double-touching allows
+                //   k=4 to still give 3 pieces.
+                // value=4: lower bound only (k ≥ 4), but max k is 4 anyway.
                 if value == 1 {
                     if n_cut >= 2 {
+                        tracing::debug!(
+                            vertex = ?(vi, vj),
+                            value,
+                            n_cut,
+                            unk_len = unk.len(),
+                            "watchtower edge-based: cycle value=1 too many cuts"
+                        );
                         return Err(());
                     }
                     if n_cut == 1 && !unk.is_empty() {
@@ -176,22 +213,21 @@ impl Solver {
                             progress = true;
                         }
                     }
-                    // n_cut == 0: 0 or 1 cuts both give 1 piece → no forcing
                 } else {
-                    // value >= 2: need exactly value cuts
-                    if n_cut > value {
+                    // value >= 2: lower bound only. Double-touching means a piece
+                    // can reach the vertex via multiple cells, so more cuts than
+                    // the minimum can still satisfy the piece count.
+                    if n_cut + unk.len() < value {
+                        tracing::debug!(
+                            vertex = ?(vi, vj),
+                            value,
+                            n_cut,
+                            unk_len = unk.len(),
+                            "watchtower edge-based: cycle not enough edges"
+                        );
                         return Err(());
                     }
-                    if n_cut == value && !unk.is_empty() {
-                        for eid in unk {
-                            if !self.set_edge(eid, EdgeState::Uncut) {
-                                return Err(());
-                            }
-                            progress = true;
-                        }
-                    } else if n_cut + unk.len() < value {
-                        return Err(());
-                    } else if n_cut + unk.len() == value && !unk.is_empty() {
+                    if n_cut + unk.len() == value && !unk.is_empty() {
                         for eid in unk {
                             if !self.set_edge(eid, EdgeState::Cut) {
                                 return Err(());
@@ -201,26 +237,70 @@ impl Solver {
                     }
                 }
             } else {
-                // Tree (2 or 3 cells): pieces = 1 + k, need k = value - 1
+                // Tree (2 or 3 cells): pieces = 1 + k.
+                // value=1: force no cuts (k = 0).
+                // value=2: lower bound only (k ≥ 1). A piece reaching via
+                //   two paths allows k=2 to still give 2 pieces.
+                // value≥3: exact cuts (k = value - 1).
                 let needed_k = value.saturating_sub(1);
-                if n_cut > needed_k {
-                    return Err(());
-                }
-                if n_cut == needed_k && !unk.is_empty() {
-                    for eid in unk {
-                        if !self.set_edge(eid, EdgeState::Uncut) {
-                            return Err(());
-                        }
-                        progress = true;
+                if value == 2 {
+                    // Lower bound only
+                    if n_cut + unk.len() < needed_k {
+                        tracing::debug!(
+                            vertex = ?(vi, vj),
+                            value,
+                            n_cut,
+                            needed_k,
+                            unk_len = unk.len(),
+                            "watchtower edge-based: tree not enough edges"
+                        );
+                        return Err(());
                     }
-                } else if n_cut + unk.len() < needed_k {
-                    return Err(());
-                } else if n_cut + unk.len() == needed_k && !unk.is_empty() {
-                    for eid in unk {
-                        if !self.set_edge(eid, EdgeState::Cut) {
-                            return Err(());
+                    if n_cut + unk.len() == needed_k && !unk.is_empty() {
+                        for eid in unk {
+                            if !self.set_edge(eid, EdgeState::Cut) {
+                                return Err(());
+                            }
+                            progress = true;
                         }
-                        progress = true;
+                    }
+                } else {
+                    // value == 1 or value >= 3: exact cuts
+                    if n_cut > needed_k {
+                        tracing::debug!(
+                            vertex = ?(vi, vj),
+                            value,
+                            n_cut,
+                            needed_k,
+                            unk_len = unk.len(),
+                            "watchtower edge-based: tree too many cuts"
+                        );
+                        return Err(());
+                    }
+                    if n_cut == needed_k && !unk.is_empty() {
+                        for eid in unk {
+                            if !self.set_edge(eid, EdgeState::Uncut) {
+                                return Err(());
+                            }
+                            progress = true;
+                        }
+                    } else if n_cut + unk.len() < needed_k {
+                        tracing::debug!(
+                            vertex = ?(vi, vj),
+                            value,
+                            n_cut,
+                            needed_k,
+                            unk_len = unk.len(),
+                            "watchtower edge-based: tree not enough edges"
+                        );
+                        return Err(());
+                    } else if n_cut + unk.len() == needed_k && !unk.is_empty() {
+                        for eid in unk {
+                            if !self.set_edge(eid, EdgeState::Cut) {
+                                return Err(());
+                            }
+                            progress = true;
+                        }
                     }
                 }
             }
@@ -267,8 +347,14 @@ impl Solver {
                     if clue.value <= 1 {
                         return None; // k ∈ {0,1}, parity not fixed
                     }
+                    if clue.value <= 3 {
+                        return None; // k ∈ {value,...,4}, parity not fixed due to double-touching
+                    }
                     clue.value
                 } else {
+                    if clue.value == 2 {
+                        return None; // k ∈ {1,2}, parity not fixed
+                    }
                     clue.value.saturating_sub(1)
                 };
                 let mut edge_ids: Vec<EdgeId> = Vec::new();
@@ -488,7 +574,15 @@ impl Solver {
                                 _ => vec![],  // k=3 forbidden, k=4 uncertain
                             }
                         } else {
-                            vec![value]
+                            // Non-loopy: double-touching allows k > value for value >= 2.
+                            // value=2: k ∈ {2,3,4}; value=3: k ∈ {3,4}; value=4: k ∈ {4}.
+                            // Probe only explores k values beyond the minimum when needed,
+                            // but we must include them in possible_ks to avoid false contradictions.
+                            match value {
+                                2 => vec![2, 3, 4],
+                                3 => vec![3, 4],
+                                _ => vec![value],
+                            }
                         }
                     } else {
                         // Tree: pieces = 1 + k, so k = value - 1
@@ -823,8 +917,10 @@ mod tests {
     }
 
     #[test]
-    fn watchtower_interior_4cells_value2_two_cuts_forces_rest_uncut() {
-        // 2×2 grid. value=2. Set two cuts → rest Uncut.
+    fn watchtower_interior_4cells_value2_two_cuts_no_upper_bound() {
+        // 2×2 grid. value=2. Set two cuts. Unlike value≥3, value=2 does
+        // NOT force remaining to Uncut because a piece reaching the vertex
+        // via two paths (double-touching) allows more than 2 cuts.
         let mut s = make_watchtower_solver(
             "\
 +---+---+
@@ -842,9 +938,7 @@ mod tests {
 
         let result = s.propagate_watchtower();
         assert!(result.is_ok());
-        assert!(result.unwrap());
-        assert_eq!(s.edges[s.grid.h_edge(0, 1)], EdgeState::Uncut);
-        assert_eq!(s.edges[s.grid.v_edge(1, 0)], EdgeState::Uncut);
+        assert!(!result.unwrap(), "value=2 cycle should not force Uncut (double-touching possible)");
     }
 
     #[test]
