@@ -1,8 +1,6 @@
 use super::super::{EdgeForcer, Solver};
 use crate::types::*;
 use crate::uf::ParityUF;
-use std::collections::HashSet;
-
 impl Solver {
     /// Propagate watchtower (vertex) clues.
     ///
@@ -52,20 +50,33 @@ impl Solver {
                         return (false, vec![]); // will be caught by edge-based pass
                     }
 
-                    let comp_set: HashSet<usize> =
-                        cells.iter().map(|&c| self.curr_comp_id[c]).collect();
-                    let num_sealed = comp_set.iter().filter(|&&ci| self.is_sealed(ci)).count();
-                    let num_growing = comp_set.len() - num_sealed;
+                    // Deduplicate component IDs with a fixed-size array (at most 4 cells).
+                    let mut comp_arr = [usize::MAX; 4];
+                    let mut comp_count = 0usize;
+                    for &c in &cells {
+                        let ci = self.curr_comp_id[c];
+                        if !comp_arr[..comp_count].contains(&ci) {
+                            comp_arr[comp_count] = ci;
+                            comp_count += 1;
+                        }
+                    }
+                    let mut num_sealed = 0usize;
+                    for &ci in &comp_arr[..comp_count] {
+                        if self.is_sealed(ci) {
+                            num_sealed += 1;
+                        }
+                    }
+                    let num_growing = comp_count - num_sealed;
 
                     let min_distinct = num_sealed + if num_growing > 0 { 1 } else { 0 };
-                    let max_distinct = comp_set.len();
+                    let max_distinct = comp_count;
 
                     let is_err = value < min_distinct || value > max_distinct;
                     tracing::debug!(
                         vertex = ?(vi, vj),
                         value,
                         n,
-                        comp_distinct = comp_set.len(),
+                        comp_distinct = comp_count,
                         num_sealed,
                         num_growing,
                         min_distinct,
@@ -75,7 +86,7 @@ impl Solver {
                     );
 
                     let mut forced_cuts = Vec::new();
-                    if max_distinct == value && comp_set.len() > 1 {
+                    if max_distinct == value && comp_count > 1 {
                         for &(a_idx, b_idx) in &cell_pair_indices {
                             if let (Some(a), Some(b)) = (cell_opts[a_idx], cell_opts[b_idx]) {
                                 if !self.grid.cell_exists[a] || !self.grid.cell_exists[b] {
