@@ -432,14 +432,12 @@ impl Solver {
         let (compass_cell, target_cell) = pairs[idx];
 
         // SAME branch: force via BFS path (dist==1 → single boundary edge forced).
-        let bfs_ok;
-        let mut same_prop_ok = false;
         {
             let snap = self.snapshot();
             self.debug_current_prop = "flat_compass_same_bfs";
-            bfs_ok = self.branch_pair_same(compass_cell, target_cell).is_ok();
-            if bfs_ok && self.propagate().is_ok() {
-                same_prop_ok = true;
+            if self.branch_pair_same(compass_cell, target_cell).is_ok()
+                && self.propagate().is_ok()
+            {
                 self.branch_compass_flat_inner(pairs, idx + 1);
             }
             self.restore(snap);
@@ -449,20 +447,12 @@ impl Solver {
             return;
         }
 
-        // If BFS found a path but propagation failed, do NOT try DIFF. Propagation
-        // may have failed due to downstream errors (e.g. compass placement over-
-        // constraining), not because SAME is truly impossible.  Forcing DIFF in
-        // that case can produce false no-solutions.  Skip this pair instead and
-        // let edge branching resolve it.
-        //
-        // If BFS found no path the cells are fully isolated → SAME is provably
-        // impossible, so DIFF is the only option.
-        if bfs_ok && !same_prop_ok {
-            self.branch_compass_flat_inner(pairs, idx + 1);
-            return;
-        }
-
-        // DIFF branch (BFS found no path, or SAME was already explored above).
+        // DIFF branch: always try when SAME was explored (regardless of propagation
+        // result) or when BFS found no path (SAME provably impossible).
+        // Previously this was skipped when bfs_ok && !same_prop_ok, but that caused
+        // the solver to miss solutions where the pair is genuinely DIFF — BFS finding
+        // a physical path does not mean SAME is correct, and skipping DIFF loses
+        // completeness.
         {
             let snap = self.snapshot();
             self.debug_current_prop = "flat_compass_diff";

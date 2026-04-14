@@ -24,7 +24,11 @@ pub(crate) struct EdgeSelectionCache {
 }
 
 impl EdgeSelectionCache {
-    pub(crate) fn new(clue_cut_edges: Vec<EdgeId>, watchtower_vertices: HashSet<VertexId>, compass_adjacent: Vec<bool>) -> Self {
+    pub(crate) fn new(
+        clue_cut_edges: Vec<EdgeId>,
+        watchtower_vertices: HashSet<VertexId>,
+        compass_adjacent: Vec<bool>,
+    ) -> Self {
         Self {
             clue_cut_edges,
             sealed_neighbor_sizes: None,
@@ -39,7 +43,7 @@ impl EdgeSelectionCache {
 }
 
 impl Solver {
-    fn select_edge(&self) -> Option<(EdgeId, i32)> {
+    fn select_edge(&mut self) -> Option<(EdgeId, i32)> {
         let num_edges = self.grid.num_edges();
         if self.curr_comp_id.is_empty() {
             for e in 0..num_edges {
@@ -52,8 +56,85 @@ impl Solver {
 
         let num_comp = self.curr_comp_sz.len();
 
-        // Use cached per-component data (populated during propagation)
+        // Refresh per-component caches using preallocated vecs (avoids
+        // fresh allocation each call while always reflecting latest state).
         let has_clue_edges = !self.edge_selection.clue_cut_edges.is_empty();
+        if has_clue_edges {
+            let ccc = &mut self.edge_selection.clue_constrained_comp;
+            ccc.clear();
+            ccc.resize(num_comp, false);
+            for i in 0..self.edge_selection.clue_cut_edges.len() {
+                let ce = self.edge_selection.clue_cut_edges[i];
+                if self.edges[ce] != EdgeState::Cut {
+                    continue;
+                }
+                let (c1, c2) = self.grid.edge_cells(ce);
+                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
+                    continue;
+                }
+                let ci1 = self.curr_comp_id[c1];
+                let ci2 = self.curr_comp_id[c2];
+                if ci1 < num_comp {
+                    self.edge_selection.clue_constrained_comp[ci1] = true;
+                }
+                if ci2 < num_comp {
+                    self.edge_selection.clue_constrained_comp[ci2] = true;
+                }
+            }
+        } else {
+            self.edge_selection.clue_constrained_comp.clear();
+        }
+
+        if self.has_compass_clue {
+            let cc = &mut self.edge_selection.comp_compass_count;
+            cc.clear();
+            cc.resize(num_comp, 0);
+            let dal = &mut self.edge_selection.comp_dir_at_limit;
+            dal.clear();
+            dal.resize(num_comp, false);
+            for &cli in &self.prop.compass_clue_indices {
+                if let CellClue::Compass { cell, compass } = &self.puzzle.cell_clues[cli] {
+                    let ci = self.curr_comp_id[*cell];
+                    if ci == usize::MAX || ci >= num_comp {
+                        continue;
+                    }
+                    self.edge_selection.comp_compass_count[ci] += 1;
+                    let (cr, cc) = self.grid.cell_pos(*cell);
+                    let mut counts = [0usize; 4]; // N, S, E, W
+                    for &c in &self.comp_cells[ci] {
+                        let (pr, pc) = self.grid.cell_pos(c);
+                        if pr < cr {
+                            counts[0] += 1;
+                        }
+                        if pr > cr {
+                            counts[1] += 1;
+                        }
+                        if pc > cc {
+                            counts[2] += 1;
+                        }
+                        if pc < cc {
+                            counts[3] += 1;
+                        }
+                    }
+                    for &(val, cnt) in &[
+                        (compass.n, counts[0]),
+                        (compass.s, counts[1]),
+                        (compass.e, counts[2]),
+                        (compass.w, counts[3]),
+                    ] {
+                        if let Some(v) = val {
+                            if cnt == v {
+                                self.edge_selection.comp_dir_at_limit[ci] = true;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            self.edge_selection.comp_compass_count.clear();
+            self.edge_selection.comp_dir_at_limit.clear();
+        }
+
         let clue_constrained_comp = &self.edge_selection.clue_constrained_comp;
         let comp_compass_count = &self.edge_selection.comp_compass_count;
         let comp_dir_at_limit = &self.edge_selection.comp_dir_at_limit;
@@ -118,8 +199,10 @@ impl Solver {
 
             // Bonus: edge adjacent to a clue-constrained component
             // (component touching a gemini/delta/inequality/diff edge)
-            if has_clue_edges && !clue_constrained_comp.is_empty()
-                && (clue_constrained_comp[ci1] || clue_constrained_comp[ci2]) {
+            if has_clue_edges
+                && !clue_constrained_comp.is_empty()
+                && (clue_constrained_comp[ci1] || clue_constrained_comp[ci2])
+            {
                 score += 30;
             }
 
@@ -321,12 +404,9 @@ impl Solver {
         self.node_count += 1;
         self.report_progress();
         self.search_depth += 1;
-        let _search_span = tracing::debug_span!(
-            "search",
-            depth = self.search_depth,
-            unk = self.curr_unknown
-        )
-        .entered();
+        let _search_span =
+            tracing::debug_span!("search", depth = self.search_depth, unk = self.curr_unknown)
+                .entered();
 
         if self.curr_unknown == 0 {
             let pieces = self.compute_pieces();

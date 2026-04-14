@@ -1174,75 +1174,9 @@ impl Solver {
             }
         }
 
-        // Cache edge-selection data only outside probing (select_edge is never
-        // called from inside a probe, so computing these there is wasted work).
-        if !self.in_probing {
-            // Clue-constrained components
-            if !self.edge_selection.clue_cut_edges.is_empty() {
-                let ccc = &mut self.edge_selection.clue_constrained_comp;
-                ccc.clear();
-                ccc.resize(num_comp, false);
-                for i in 0..self.edge_selection.clue_cut_edges.len() {
-                    let ce = self.edge_selection.clue_cut_edges[i];
-                    if self.edges[ce] != EdgeState::Cut {
-                        continue;
-                    }
-                    let (c1, c2) = self.grid.edge_cells(ce);
-                    if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
-                        continue;
-                    }
-                    let ci1 = self.curr_comp_id[c1];
-                    let ci2 = self.curr_comp_id[c2];
-                    if ci1 < num_comp { self.edge_selection.clue_constrained_comp[ci1] = true; }
-                    if ci2 < num_comp { self.edge_selection.clue_constrained_comp[ci2] = true; }
-                }
-            } else {
-                self.edge_selection.clue_constrained_comp.clear();
-            }
-
-            // Compass info per component
-            if self.has_compass_clue {
-                let cc = &mut self.edge_selection.comp_compass_count;
-                cc.clear();
-                cc.resize(num_comp, 0);
-                let dal = &mut self.edge_selection.comp_dir_at_limit;
-                dal.clear();
-                dal.resize(num_comp, false);
-                for &cli in &self.prop.compass_clue_indices {
-                    if let CellClue::Compass { cell, compass } = &self.puzzle.cell_clues[cli] {
-                        let ci = self.curr_comp_id[*cell];
-                        if ci == usize::MAX || ci >= num_comp {
-                            continue;
-                        }
-                        self.edge_selection.comp_compass_count[ci] += 1;
-                        let (cr, cc) = self.grid.cell_pos(*cell);
-                        let mut counts = [0usize; 4]; // N, S, E, W
-                        for &c in &self.comp_cells[ci] {
-                            let (pr, pc) = self.grid.cell_pos(c);
-                            if pr < cr { counts[0] += 1; }
-                            if pr > cr { counts[1] += 1; }
-                            if pc > cc { counts[2] += 1; }
-                            if pc < cc { counts[3] += 1; }
-                        }
-                        for &(val, cnt) in &[
-                            (compass.n, counts[0]),
-                            (compass.s, counts[1]),
-                            (compass.e, counts[2]),
-                            (compass.w, counts[3]),
-                        ] {
-                            if let Some(v) = val {
-                                if cnt == v {
-                                    self.edge_selection.comp_dir_at_limit[ci] = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                self.edge_selection.comp_compass_count.clear();
-                self.edge_selection.comp_dir_at_limit.clear();
-            }
-        }
+        // Note: clue_constrained_comp, comp_compass_count, comp_dir_at_limit
+        // are computed in select_edge (not here) using cached vecs for allocation
+        // reuse, to ensure they reflect the latest edge/component state.
 
         for ci in 0..num_comp {
             let target = self.curr_target_area[ci];
