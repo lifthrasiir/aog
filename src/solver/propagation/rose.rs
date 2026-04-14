@@ -72,7 +72,7 @@ impl Solver {
         // Quick check: if no components have rose symbols, skip
         let num_comp = self.curr_comp_sz.len();
         let mut any_rose_comp = false;
-        for ci in self.growing(num_comp).collect::<Vec<_>>() {
+        for &ci in &self.prop.growing_list {
             for &c in &self.comp_cells[ci] {
                 if self.cell_rose_sym[c] != u8::MAX {
                     any_rose_comp = true;
@@ -89,7 +89,7 @@ impl Solver {
 
         // Precompute comp_rose bitmask for each growing component
         let mut comp_rose_arr: Vec<u8> = vec![0; num_comp];
-        for ci in self.growing(num_comp).collect::<Vec<_>>() {
+        for &ci in &self.prop.growing_list {
             for &c in &self.comp_cells[ci] {
                 let sym = self.cell_rose_sym[c];
                 if sym != u8::MAX {
@@ -101,70 +101,83 @@ impl Solver {
         // --- Phase 1: Cross-type chokepoint Uncut forcing ---
         // Only check components where cutting a growth edge might disconnect a required type.
         // Skip components with many unknown growth edges (cutting one rarely disconnects).
-        for ci in self.growing(num_comp).collect::<Vec<_>>() {
-            let comp_rose = comp_rose_arr[ci];
-            let missing = self.rose_bits_all & !comp_rose;
-            if missing == 0 {
-                continue;
-            }
-
-            // Count unknown growth edges; only check chokepoints (1-2 edges)
-            let mut unknown_edges: Vec<EdgeId> = Vec::new();
-            for &e in &self.prop.growth_edges[ci] {
-                if self.edges[e] == EdgeState::Unknown {
-                    unknown_edges.push(e);
+        {
+            let growing_list = std::mem::take(&mut self.prop.growing_list);
+            for &ci in &growing_list {
+                let comp_rose = comp_rose_arr[ci];
+                let missing = self.rose_bits_all & !comp_rose;
+                if missing == 0 {
+                    continue;
                 }
-            }
-            if unknown_edges.len() > 2 {
-                continue;
-            }
 
-            for e in unknown_edges {
-                let reachable_without = self.bfs_reachable_rose_types(ci, comp_rose, Some(e));
-                if (reachable_without & missing) != missing {
-                    if !self.set_edge(e, EdgeState::Uncut) {
-                        return Err(());
+                // Count unknown growth edges; only check chokepoints (1-2 edges)
+                let mut unknown_edges: Vec<EdgeId> = Vec::new();
+                for &e in &self.prop.growth_edges[ci] {
+                    if self.edges[e] == EdgeState::Unknown {
+                        unknown_edges.push(e);
                     }
-                    return Ok(true);
+                }
+                if unknown_edges.len() > 2 {
+                    continue;
+                }
+
+                for e in unknown_edges {
+                    let reachable_without = self.bfs_reachable_rose_types(ci, comp_rose, Some(e));
+                    if (reachable_without & missing) != missing {
+                        if !self.set_edge(e, EdgeState::Uncut) {
+                            self.prop.growing_list = growing_list;
+                            return Err(());
+                        }
+                        self.prop.growing_list = growing_list;
+                        return Ok(true);
+                    }
                 }
             }
+            self.prop.growing_list = growing_list;
         }
 
         // --- Phase 2: Two-level restricted reachability + single-growth-edge forcing ---
-        for ci in self.growing(num_comp).collect::<Vec<_>>() {
-            let comp_rose = comp_rose_arr[ci];
-            let missing = self.rose_bits_all & !comp_rose;
-            if missing == 0 {
-                continue;
-            }
+        {
+            let growing_list = std::mem::take(&mut self.prop.growing_list);
+            for &ci in &growing_list {
+                let comp_rose = comp_rose_arr[ci];
+                let missing = self.rose_bits_all & !comp_rose;
+                if missing == 0 {
+                    continue;
+                }
 
-            // Level 1: basic restricted reachability
-            // Only run BFS for components missing exactly 1 type (most likely to fail,
-            // and single BFS is cheap). Skip 2+ missing types (well-connected, unlikely to fail).
-            if missing.count_ones() == 1 {
-                let reachable = self.bfs_reachable_rose_types(ci, comp_rose, None);
-                if (reachable & missing) != missing {
-                    return Err(());
+                // Level 1: basic restricted reachability
+                // Only run BFS for components missing exactly 1 type (most likely to fail,
+                // and single BFS is cheap). Skip 2+ missing types (well-connected, unlikely to fail).
+                if missing.count_ones() == 1 {
+                    let reachable = self.bfs_reachable_rose_types(ci, comp_rose, None);
+                    if (reachable & missing) != missing {
+                        self.prop.growing_list = growing_list;
+                        return Err(());
+                    }
+                }
+
+                // Single Unknown growth edge → force Uncut
+                let mut unknown_growth: Option<EdgeId> = None;
+                let mut unknown_count = 0usize;
+                for &e in &self.prop.growth_edges[ci] {
+                    if self.edges[e] == EdgeState::Unknown {
+                        unknown_count += 1;
+                        unknown_growth = Some(e);
+                    }
+                }
+
+                if unknown_count == 1 {
+                    let e = unknown_growth.unwrap();
+                    if !self.set_edge(e, EdgeState::Uncut) {
+                        self.prop.growing_list = growing_list;
+                        return Err(());
+                    }
+                    self.prop.growing_list = growing_list;
+                    return Ok(true);
                 }
             }
-
-            // Single Unknown growth edge → force Uncut
-            let mut unknown_growth: Option<EdgeId> = None;
-            let mut unknown_count = 0usize;
-            for &e in &self.prop.growth_edges[ci] {
-                if self.edges[e] == EdgeState::Unknown {
-                    unknown_count += 1;
-                    unknown_growth = Some(e);
-                }
-            }
-
-            if unknown_count == 1 {
-                let e = unknown_growth.unwrap();
-                if !self.set_edge(e, EdgeState::Uncut) {
-                    return Err(());
-                }
-                return Ok(true);
-            }
+            self.prop.growing_list = growing_list;
         }
 
         Ok(false)
@@ -175,8 +188,8 @@ impl Solver {
         if self.rose_bits_all == 0 || self.curr_comp_id.is_empty() {
             return Ok(false);
         }
-        let num_comp = self.curr_comp_sz.len();
-        for ci in self.growing(num_comp).collect::<Vec<_>>() {
+        let growing_list = std::mem::take(&mut self.prop.growing_list);
+        for &ci in &growing_list {
             let mut comp_rose: u8 = 0;
             for &c in &self.comp_cells[ci] {
                 let sym = self.cell_rose_sym[c];
@@ -206,12 +219,15 @@ impl Solver {
                 // Check if neighbor has a rose symbol
                 if self.cell_rose_sym[other] != u8::MAX {
                     if !self.set_edge(e, EdgeState::Cut) {
+                        self.prop.growing_list = growing_list;
                         return Err(());
                     }
+                    self.prop.growing_list = growing_list;
                     return Ok(true);
                 }
             }
         }
+        self.prop.growing_list = growing_list;
 
         Ok(false)
     }

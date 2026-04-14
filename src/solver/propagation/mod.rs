@@ -39,6 +39,10 @@ pub(crate) struct PropagationState {
     pub(crate) comp_buf: Vec<usize>,
     /// Secondary reusable BFS buffer (ID mapping etc.).
     pub(crate) comp_buf2: Vec<usize>,
+    /// Precomputed list of growing component indices (populated by build_components).
+    pub(crate) growing_list: Vec<usize>,
+    /// Precomputed list of sealed component indices (populated by build_components).
+    pub(crate) sealed_list: Vec<usize>,
 }
 
 impl PropagationState {
@@ -62,6 +66,8 @@ impl PropagationState {
             compass_clue_indices: Vec::new(),
             comp_buf: vec![usize::MAX; nc],
             comp_buf2: Vec::new(),
+            growing_list: Vec::new(),
+            sealed_list: Vec::new(),
         }
     }
 }
@@ -135,7 +141,9 @@ impl Solver {
             );
             run_prop!(
                 "loop_closure",
-                !self.in_probing && self.rose_bits_all != 0 && self.prop.exact_piece_count.map_or(false, |p| p >= 2),
+                !self.in_probing
+                    && self.rose_bits_all != 0
+                    && self.prop.exact_piece_count.map_or(false, |p| p >= 2),
                 self.propagate_loop_closure()
             );
             run_prop!(
@@ -224,7 +232,12 @@ impl Solver {
                 .entered();
                 self.probe(|s| s.set_edge(e, EdgeState::Cut))
             };
-            tracing::trace!(edge = e, cut_ok, unk = self.curr_unknown, "probe Cut result");
+            tracing::trace!(
+                edge = e,
+                cut_ok,
+                unk = self.curr_unknown,
+                "probe Cut result"
+            );
 
             if !cut_ok {
                 // Cut contradicts -> force Uncut
@@ -250,7 +263,12 @@ impl Solver {
                 .entered();
                 self.probe(|s| s.set_edge(e, EdgeState::Uncut))
             };
-            tracing::trace!(edge = e, uncut_ok, unk = self.curr_unknown, "probe Uncut result");
+            tracing::trace!(
+                edge = e,
+                uncut_ok,
+                unk = self.curr_unknown,
+                "probe Uncut result"
+            );
 
             if !uncut_ok {
                 // Uncut contradicts -> force Cut

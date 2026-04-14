@@ -154,14 +154,16 @@ impl Solver {
             }
             self.edges[e] = old_state;
         }
-        self.pair_branch.diffs.truncate(snap.diffs);
-        self.pair_branch
-            .diff_set
-            .retain(|pair| self.pair_branch.diffs.iter().any(|d| *d == *pair));
-        self.pair_branch.sames.truncate(snap.sames);
-        self.pair_branch
-            .same_set
-            .retain(|pair| self.pair_branch.sames.iter().any(|d| *d == *pair));
+        // Remove pairs added after the snapshot by popping from the Vec
+        // and removing from the HashSet (O(1) per element).
+        while self.pair_branch.diffs.len() > snap.diffs {
+            let pair = self.pair_branch.diffs.pop().unwrap();
+            self.pair_branch.diff_set.remove(&pair);
+        }
+        while self.pair_branch.sames.len() > snap.sames {
+            let pair = self.pair_branch.sames.pop().unwrap();
+            self.pair_branch.same_set.remove(&pair);
+        }
     }
 
     /// Run `setup` to modify edge state. If setup returns true, propagate.
@@ -185,14 +187,6 @@ impl Solver {
     #[inline]
     pub(crate) fn is_growing(&self, ci: usize) -> bool {
         ci < self.can_grow_buf.len() && self.can_grow_buf[ci]
-    }
-
-    pub(crate) fn sealed(&self, num_comp: usize) -> impl Iterator<Item = usize> + '_ {
-        (0..num_comp).filter(|&ci| self.is_sealed(ci))
-    }
-
-    pub(crate) fn growing(&self, num_comp: usize) -> impl Iterator<Item = usize> + '_ {
-        (0..num_comp).filter(|&ci| self.is_growing(ci))
     }
 }
 

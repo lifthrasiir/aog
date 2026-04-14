@@ -143,23 +143,28 @@ impl Solver {
                     let clue = &self.puzzle.cell_clues[clue_idx];
                     if let CellClue::Area { value, .. } = clue {
                         if let Some(prev) = target_area {
-                            if prev != *value { return Err(()); }
+                            if prev != *value {
+                                return Err(());
+                            }
                         }
                         target_area = Some(*value);
                         area_count += 1;
                     } else if let CellClue::Polyomino { shape, .. } = clue {
                         let sz = shape.cells.len();
                         if let Some(prev) = target_area {
-                            if prev != sz { return Err(()); }
+                            if prev != sz {
+                                return Err(());
+                            }
                         }
                         target_area = Some(sz);
                         area_count += 1;
                     } else if let CellClue::Compass { cell, compass } = clue {
-                        let (cmin, cmax, cexact) =
-                            self.get_compass_area_bounds(*cell, compass);
+                        let (cmin, cmax, cexact) = self.get_compass_area_bounds(*cell, compass);
                         if let Some(exact) = cexact {
                             if let Some(prev) = target_area {
-                                if prev != exact { return Err(()); }
+                                if prev != exact {
+                                    return Err(());
+                                }
                             }
                             target_area = Some(exact);
                             area_count += 1;
@@ -200,7 +205,8 @@ impl Solver {
             }
         }
 
-        // Check Unknown edges to outside
+        // Check Unknown edges to outside — single merged pass for:
+        // (1) growth edges, (2) rose duplicate forcing, (3) exact piece count cap
         self.can_grow_buf.clear();
         self.can_grow_buf.resize(num_comp, false);
         // Reuse growth_edges allocations
@@ -212,6 +218,8 @@ impl Solver {
             self.prop.growth_edges.push(Vec::new());
         }
         let mut same_area_ef = EdgeForcer::new();
+        let mut rose_cut_ef = EdgeForcer::new();
+        let has_rose = self.rose_bits_all != 0;
 
         for e in 0..self.grid.num_edges() {
             if self.edges[e] != EdgeState::Unknown {
@@ -240,6 +248,15 @@ impl Solver {
                         return Err(());
                     }
                     continue;
+                }
+
+                // Rose: if merging would introduce a duplicate symbol → force Cut.
+                if has_rose {
+                    let would_dup = (self.prop.comp_rose[ci1] & self.prop.comp_rose[ci2]) != 0;
+                    if would_dup {
+                        rose_cut_ef.force_cut(e);
+                        continue;
+                    }
                 }
 
                 // Same-area merge: when distinct area sum = total cells,
@@ -273,11 +290,25 @@ impl Solver {
             }
         }
 
-        // Apply same-area forced Uncuts (collected above to avoid stale component state)
+        // Apply deferred edge forcings
         same_area_ef.apply(self)?;
+        if has_rose {
+            rose_cut_ef.apply(self)?;
+        }
+
+        // === Build precomputed growing/sealed lists ===
+        self.prop.growing_list.clear();
+        self.prop.sealed_list.clear();
+        for ci in 0..num_comp {
+            if self.can_grow_buf[ci] {
+                self.prop.growing_list.push(ci);
+            } else {
+                self.prop.sealed_list.push(ci);
+            }
+        }
 
         // === Rose window propagation ===
-        if self.rose_bits_all != 0 {
+        if has_rose {
             // 1) Duplicate rose symbols within a component → contradiction.
             // Two same-type rose cells connected by Uncut edges are in the same piece,
             // violating the "exactly one of each type per piece" rule.
@@ -298,46 +329,19 @@ impl Solver {
             }
 
             // 2) Sealed component missing a rose symbol → contradiction
-            for ci in self.sealed(num_comp).collect::<Vec<_>>() {
+            for &ci in &self.prop.sealed_list {
                 let missing = self.rose_bits_all & !self.prop.comp_rose[ci];
                 if missing != 0 {
                     return Err(());
                 }
             }
-
-            // 3) Growth edge forcing: collect forced Cut/Uncut edges
-            let mut rose_cut_ef = EdgeForcer::new();
-
-            for e in 0..self.grid.num_edges() {
-                if self.edges[e] != EdgeState::Unknown {
-                    continue;
-                }
-                let (c1, c2) = self.grid.edge_cells(e);
-                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
-                    continue;
-                }
-                let ci1 = self.curr_comp_id[c1];
-                let ci2 = self.curr_comp_id[c2];
-                if ci1 == ci2 {
-                    continue;
-                }
-
-                // If merging would introduce a duplicate symbol → force Cut.
-                // Check both: endpoint symbols and existing component symbols.
-                let would_dup = (self.prop.comp_rose[ci1] & self.prop.comp_rose[ci2]) != 0;
-                if would_dup {
-                    rose_cut_ef.force_cut(e);
-                }
-            }
-
-            rose_cut_ef.apply(self)?;
         }
 
         // === Exact piece count cap ===
         // If we know there are exactly K pieces, and K components are already sealed,
         // all remaining inter-component edges must be Cut (no more pieces allowed).
         if let Some(k) = self.prop.exact_piece_count {
-            let sealed_count = self.sealed(num_comp).count();
+            let sealed_count = self.prop.sealed_list.len();
             if sealed_count > k {
                 return Err(());
             }
@@ -666,10 +670,18 @@ impl Solver {
             let mut counts = [0usize; 4]; // N, S, E, W
             for &c in &self.comp_cells[ci] {
                 let (pr, pc) = self.grid.cell_pos(c);
-                if pr < cr { counts[0] += 1; }
-                if pr > cr { counts[1] += 1; }
-                if pc > cc { counts[2] += 1; }
-                if pc < cc { counts[3] += 1; }
+                if pr < cr {
+                    counts[0] += 1;
+                }
+                if pr > cr {
+                    counts[1] += 1;
+                }
+                if pc > cc {
+                    counts[2] += 1;
+                }
+                if pc < cc {
+                    counts[3] += 1;
+                }
             }
 
             // Classify growth edges by direction (single pass, no allocation)
@@ -679,14 +691,25 @@ impl Solver {
                 let (c1, c2) = self.grid.edge_cells(e);
                 let other = if self.curr_comp_id[c1] == ci { c2 } else { c1 };
                 let (pr, pc) = self.grid.cell_pos(other);
-                if pr < cr { dir_count[0] += 1; dir_last[0] = e; }
-                if pr > cr { dir_count[1] += 1; dir_last[1] = e; }
-                if pc > cc { dir_count[2] += 1; dir_last[2] = e; }
-                if pc < cc { dir_count[3] += 1; dir_last[3] = e; }
+                if pr < cr {
+                    dir_count[0] += 1;
+                    dir_last[0] = e;
+                }
+                if pr > cr {
+                    dir_count[1] += 1;
+                    dir_last[1] = e;
+                }
+                if pc > cc {
+                    dir_count[2] += 1;
+                    dir_last[2] = e;
+                }
+                if pc < cc {
+                    dir_count[3] += 1;
+                    dir_last[3] = e;
+                }
             }
 
-            let compass_vals: [Option<usize>; 4] =
-                [compass.n, compass.s, compass.e, compass.w];
+            let compass_vals: [Option<usize>; 4] = [compass.n, compass.s, compass.e, compass.w];
 
             for idx in 0..4 {
                 let Some(v) = compass_vals[idx] else { continue };
@@ -751,8 +774,10 @@ impl Solver {
         {
             let cci = &self.prop.compass_clue_indices;
             for ii in 0..cci.len() {
-                let CellClue::Compass { cell: ca, compass: pa } =
-                    &self.puzzle.cell_clues[cci[ii]]
+                let CellClue::Compass {
+                    cell: ca,
+                    compass: pa,
+                } = &self.puzzle.cell_clues[cci[ii]]
                 else {
                     continue;
                 };
@@ -761,8 +786,10 @@ impl Solver {
                     continue;
                 }
                 for jj in (ii + 1)..cci.len() {
-                    let CellClue::Compass { cell: cb, compass: pb } =
-                        &self.puzzle.cell_clues[cci[jj]]
+                    let CellClue::Compass {
+                        cell: cb,
+                        compass: pb,
+                    } = &self.puzzle.cell_clues[cci[jj]]
                     else {
                         continue;
                     };
@@ -785,8 +812,7 @@ impl Solver {
             let mut bbox_max_c = vec![0isize; num_comp];
 
             for &cl_idx in &self.prop.compass_clue_indices {
-                let CellClue::Compass { cell, compass } = &self.puzzle.cell_clues[cl_idx]
-                else {
+                let CellClue::Compass { cell, compass } = &self.puzzle.cell_clues[cl_idx] else {
                     continue;
                 };
                 let ci = self.curr_comp_id[*cell];
@@ -855,9 +881,7 @@ impl Solver {
                 let mut compass_per_comp: Vec<Vec<(CellId, CompassData)>> =
                     vec![Vec::new(); num_comp];
                 for &cl_idx in &self.prop.compass_clue_indices {
-                    if let CellClue::Compass { cell, compass } =
-                        &self.puzzle.cell_clues[cl_idx]
-                    {
+                    if let CellClue::Compass { cell, compass } = &self.puzzle.cell_clues[cl_idx] {
                         let ci = self.curr_comp_id[*cell];
                         if ci != usize::MAX {
                             compass_per_comp[ci].push((*cell, *compass));
@@ -865,7 +889,6 @@ impl Solver {
                     }
                 }
                 self.force_compass_via_bridges_and_gateways(
-                    num_comp,
                     &compass_per_comp,
                     &mut compass_cut_ef,
                     &mut compass_uncut_ef,
@@ -1352,8 +1375,7 @@ impl Solver {
         }
 
         // Quick check: need at least one sealed component
-        let has_sealed = self.sealed(num_comp).next().is_some();
-        if !has_sealed {
+        if self.prop.sealed_list.is_empty() {
             return Ok(());
         }
 

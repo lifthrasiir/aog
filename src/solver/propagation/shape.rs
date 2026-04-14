@@ -21,9 +21,8 @@ impl Solver {
             .any(|cl| matches!(cl.kind, EdgeClueKind::Delta));
 
         if has_mingle || has_gemini || has_mismatch || has_delta {
-            let sealed: Vec<usize> = self.sealed(num_comp).collect();
             let mut comp_shape: Vec<Option<Shape>> = vec![None; num_comp];
-            for ci in sealed {
+            for &ci in &self.prop.sealed_list {
                 let at_limit = match self.curr_target_area[ci] {
                     Some(t) => self.curr_comp_sz[ci] == t,
                     None => true,
@@ -207,7 +206,7 @@ impl Solver {
                 }
 
                 // Growing components: check if at least one shape of their target size is available
-                for ci in self.growing(num_comp).collect::<Vec<_>>() {
+                for &ci in &self.prop.growing_list {
                     let Some(target) = self.curr_target_area[ci] else {
                         continue; // no fixed target area, skip
                     };

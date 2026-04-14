@@ -70,12 +70,11 @@ impl Solver {
     /// Called only when `!self.in_probing` to avoid performance overhead.
     pub(crate) fn force_compass_via_bridges_and_gateways(
         &mut self,
-        num_comp: usize,
         compass_per_comp: &[Vec<(CellId, CompassData)>],
         compass_cut_ef: &mut EdgeForcer,
         compass_uncut_ef: &mut EdgeForcer,
     ) -> Result<(), ()> {
-        for ci in self.growing(num_comp).collect::<Vec<_>>() {
+        for &ci in &self.prop.growing_list {
             if compass_per_comp[ci].is_empty() {
                 continue;
             }

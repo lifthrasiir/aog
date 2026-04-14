@@ -50,41 +50,46 @@ impl Solver {
         let mut progress = false;
 
         // ── Check 1: single growth edge forcing ──
-        for ci in self.growing(num_comp).collect::<Vec<_>>() {
-            let must_grow = if let Some(t) = self.curr_target_area[ci] {
-                self.curr_comp_sz[ci] < t
-            } else {
-                self.curr_comp_sz[ci] < self.prop.curr_min_area[ci]
-            };
-            if !must_grow {
-                continue;
-            }
-            // Count current Unknown growth edges
-            let mut unk_edge: Option<EdgeId> = None;
-            let mut unk_count = 0usize;
-            for &e in &self.prop.growth_edges[ci] {
-                if self.edges[e] == EdgeState::Unknown {
-                    unk_count += 1;
-                    unk_edge = Some(e);
-                    if unk_count > 1 {
-                        break;
+        {
+            let growing_list = std::mem::take(&mut self.prop.growing_list);
+            for &ci in &growing_list {
+                let must_grow = if let Some(t) = self.curr_target_area[ci] {
+                    self.curr_comp_sz[ci] < t
+                } else {
+                    self.curr_comp_sz[ci] < self.prop.curr_min_area[ci]
+                };
+                if !must_grow {
+                    continue;
+                }
+                // Count current Unknown growth edges
+                let mut unk_edge: Option<EdgeId> = None;
+                let mut unk_count = 0usize;
+                for &e in &self.prop.growth_edges[ci] {
+                    if self.edges[e] == EdgeState::Unknown {
+                        unk_count += 1;
+                        unk_edge = Some(e);
+                        if unk_count > 1 {
+                            break;
+                        }
                     }
                 }
-            }
-            if unk_count == 1 {
-                let e = unk_edge.unwrap();
-                tracing::debug!(
-                    comp = ci,
-                    edge = e,
-                    sz = self.curr_comp_sz[ci],
-                    min_area = self.prop.curr_min_area[ci],
-                    "dual_conn Check1: single growth edge, forcing Uncut"
-                );
-                if !self.set_edge(e, EdgeState::Uncut) {
-                    return Err(());
+                if unk_count == 1 {
+                    let e = unk_edge.unwrap();
+                    tracing::debug!(
+                        comp = ci,
+                        edge = e,
+                        sz = self.curr_comp_sz[ci],
+                        min_area = self.prop.curr_min_area[ci],
+                        "dual_conn Check1: single growth edge, forcing Uncut"
+                    );
+                    if !self.set_edge(e, EdgeState::Uncut) {
+                        self.prop.growing_list = growing_list;
+                        return Err(());
+                    }
+                    progress = true;
                 }
-                progress = true;
             }
+            self.prop.growing_list = growing_list;
         }
 
         // If we forced edges, re-run from scratch (component info is stale).
