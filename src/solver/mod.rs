@@ -190,6 +190,21 @@ impl Solver {
             .iter()
             .any(|c| matches!(c, CellClue::Compass { .. }));
 
+        // Static compass_adjacent: which cells have compass clues (never changes)
+        let compass_adjacent = if has_compass_clue {
+            let mut adj = vec![false; nc];
+            for cl in &puzzle.cell_clues {
+                if let CellClue::Compass { cell, .. } = cl {
+                    if grid.cell_exists[*cell] {
+                        adj[*cell] = true;
+                    }
+                }
+            }
+            adj
+        } else {
+            Vec::new()
+        };
+
         Self {
             puzzle,
             grid,
@@ -224,7 +239,7 @@ impl Solver {
             match_coupled: match_coupled::MatchCoupledState::new(),
             cell_clues_indexed,
             has_any_clue,
-            edge_selection: edges::EdgeSelectionCache::new(clue_cut_edges, watchtower_vertices),
+            edge_selection: edges::EdgeSelectionCache::new(clue_cut_edges, watchtower_vertices, compass_adjacent),
             rose_bits_all,
             cell_rose_sym,
             rose_visited,

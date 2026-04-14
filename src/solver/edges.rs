@@ -13,15 +13,27 @@ pub(crate) struct EdgeSelectionCache {
     pub(crate) growth_edge_count: Vec<usize>,
     /// Vertices with watchtower clues (rebuilt after initial optimization pass).
     pub(crate) watchtower_vertices: HashSet<VertexId>,
+    /// Static: which cells are adjacent to a compass clue (computed once).
+    pub(crate) compass_adjacent: Vec<bool>,
+    /// Per-component: whether this component is adjacent to any clue edge.
+    pub(crate) clue_constrained_comp: Vec<bool>,
+    /// Per-component: number of compass clues in this component.
+    pub(crate) comp_compass_count: Vec<u8>,
+    /// Per-component: whether any compass direction is at its value limit.
+    pub(crate) comp_dir_at_limit: Vec<bool>,
 }
 
 impl EdgeSelectionCache {
-    pub(crate) fn new(clue_cut_edges: Vec<EdgeId>, watchtower_vertices: HashSet<VertexId>) -> Self {
+    pub(crate) fn new(clue_cut_edges: Vec<EdgeId>, watchtower_vertices: HashSet<VertexId>, compass_adjacent: Vec<bool>) -> Self {
         Self {
             clue_cut_edges,
             sealed_neighbor_sizes: None,
             growth_edge_count: Vec::new(),
             watchtower_vertices,
+            compass_adjacent,
+            clue_constrained_comp: Vec::new(),
+            comp_compass_count: Vec::new(),
+            comp_dir_at_limit: Vec::new(),
         }
     }
 }
@@ -40,94 +52,12 @@ impl Solver {
 
         let num_comp = self.curr_comp_sz.len();
 
-        // Precompute clue-constrained components: components adjacent to any
-        // clue edge (inequality, diff, gemini, delta). These components have
-        // shape or size constraints from edge clues.
+        // Use cached per-component data (populated during propagation)
         let has_clue_edges = !self.edge_selection.clue_cut_edges.is_empty();
-        let mut clue_constrained_comp: Vec<bool> = if has_clue_edges {
-            vec![false; num_comp]
-        } else {
-            Vec::new()
-        };
-        if has_clue_edges {
-            for &ce in &self.edge_selection.clue_cut_edges {
-                if self.edges[ce] != EdgeState::Cut {
-                    continue;
-                }
-                let (c1, c2) = self.grid.edge_cells(ce);
-                if !self.grid.cell_exists[c1] || !self.grid.cell_exists[c2] {
-                    continue;
-                }
-                let ci1 = self.curr_comp_id[c1];
-                let ci2 = self.curr_comp_id[c2];
-                clue_constrained_comp[ci1] = true;
-                clue_constrained_comp[ci2] = true;
-            }
-        }
-
-        // Precompute compass info per component:
-        // - comp_has_compass: component has at least one compass clue
-        // - comp_compass_count: number of compass clues in component
-        // - comp_dir_at_limit: component has a compass direction at its value limit
-        let (_comp_has_compass, comp_compass_count, comp_dir_at_limit) =
-            if self.has_compass_clue && !self.curr_comp_id.is_empty() {
-                let mut has_compass = vec![false; num_comp];
-                let mut compass_count = vec![0u8; num_comp];
-                let mut dir_at_limit = vec![false; num_comp];
-                for cl in &self.puzzle.cell_clues {
-                    if let CellClue::Compass { cell, compass } = cl {
-                        if !self.grid.cell_exists[*cell] {
-                            continue;
-                        }
-                        let ci = self.curr_comp_id[*cell];
-                        if ci == usize::MAX || ci >= num_comp {
-                            continue;
-                        }
-                        has_compass[ci] = true;
-                        compass_count[ci] += 1;
-                        // Check if any direction is at its compass limit
-                        let (cr, cc) = self.grid.cell_pos(*cell);
-                        let mut counts = [0usize; 4]; // N, S, E, W
-                        for &c in &self.comp_cells[ci] {
-                            let (pr, pc) = self.grid.cell_pos(c);
-                            if pr < cr { counts[0] += 1; }
-                            if pr > cr { counts[1] += 1; }
-                            if pc > cc { counts[2] += 1; }
-                            if pc < cc { counts[3] += 1; }
-                        }
-                        for &(val, cnt) in &[
-                            (compass.n, counts[0]),
-                            (compass.s, counts[1]),
-                            (compass.e, counts[2]),
-                            (compass.w, counts[3]),
-                        ] {
-                            if let Some(v) = val {
-                                if cnt == v {
-                                    dir_at_limit[ci] = true;
-                                }
-                            }
-                        }
-                    }
-                }
-                (has_compass, compass_count, dir_at_limit)
-            } else {
-                (vec![], vec![], vec![])
-            };
-
-        // Precompute compass-adjacent cells for edge bonus
-        let compass_adjacent: Vec<bool> = if self.has_compass_clue {
-            let mut adj = vec![false; self.grid.num_cells()];
-            for cl in &self.puzzle.cell_clues {
-                if let CellClue::Compass { cell, .. } = cl {
-                    if self.grid.cell_exists[*cell] {
-                        adj[*cell] = true;
-                    }
-                }
-            }
-            adj
-        } else {
-            Vec::new()
-        };
+        let clue_constrained_comp = &self.edge_selection.clue_constrained_comp;
+        let comp_compass_count = &self.edge_selection.comp_compass_count;
+        let comp_dir_at_limit = &self.edge_selection.comp_dir_at_limit;
+        let compass_adjacent = &self.edge_selection.compass_adjacent;
 
         let mut best_e = None;
         let mut best_score = i32::MIN;
@@ -188,7 +118,8 @@ impl Solver {
 
             // Bonus: edge adjacent to a clue-constrained component
             // (component touching a gemini/delta/inequality/diff edge)
-            if has_clue_edges && (clue_constrained_comp[ci1] || clue_constrained_comp[ci2]) {
+            if has_clue_edges && !clue_constrained_comp.is_empty()
+                && (clue_constrained_comp[ci1] || clue_constrained_comp[ci2]) {
                 score += 30;
             }
 

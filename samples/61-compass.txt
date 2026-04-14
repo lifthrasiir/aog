@@ -22,7 +22,7 @@
                        |    _   |
                        +--------+
 
-# unique solution (skip):
+# unique solution (needs release mode to finish in reasonable time, skip):
 #
 #                     +---+
 #                     | 1 |
