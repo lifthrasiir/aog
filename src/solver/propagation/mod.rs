@@ -221,75 +221,114 @@ impl Solver {
 
     /// Single round of failed literal detection: for each unknown edge,
     /// temporarily assign Cut and Uncut, run propagation, and if one causes
-    /// contradiction, force the opposite value.
-    /// Returns early on first force to let the outer loop cascade.
+    /// contradiction, force the opposite value. Literals implied by both probes
+    /// are forced as well. Forced edges are propagated in place and the scan
+    /// continues; returns whether anything was forced.
     fn probe_one_round(&mut self) -> Result<bool, ()> {
+        const CUT: u8 = 1;
+        const UNCUT: u8 = 2;
+        fn bit(s: EdgeState) -> u8 {
+            if s == EdgeState::Cut {
+                CUT
+            } else {
+                UNCUT
+            }
+        }
         let num_edges = self.grid.num_edges();
+        let mut forced = false;
+        // Literals implied by some successful probe in this round. Probing such a
+        // literal cannot fail (its consequences are a subset), so skip it.
+        let mut implied = vec![0u8; num_edges];
+        let mut cut_cons: Vec<(EdgeId, EdgeState)> = Vec::new();
+        let mut uncut_cons: Vec<(EdgeId, EdgeState)> = Vec::new();
+        let mut cut_mark = vec![0u8; num_edges];
 
         for e in 0..num_edges {
             if self.edges[e] != EdgeState::Unknown {
                 continue;
             }
 
-            // Probe Cut
-            let cut_ok = {
-                let _span = tracing::trace_span!(
-                    "probe",
-                    edge = e,
-                    val = "Cut",
-                    depth = self.search_depth,
-                    unk = self.curr_unknown
-                )
-                .entered();
-                self.probe(|s| s.set_edge(e, EdgeState::Cut))
-            };
-            tracing::trace!(
-                edge = e,
-                cut_ok,
-                unk = self.curr_unknown,
-                "probe Cut result"
-            );
-
+            let skip_cut = implied[e] & CUT != 0;
+            let cut_ok = skip_cut || self.probe_collect(e, EdgeState::Cut, &mut cut_cons);
             if !cut_ok {
-                // Cut contradicts -> force Uncut
-                if self.edges[e] == EdgeState::Unknown && self.set_edge(e, EdgeState::Uncut) {
-                    return Ok(true);
+                // Cut contradicts -> force Uncut, propagate in place and keep scanning
+                if !self.set_edge(e, EdgeState::Uncut) {
+                    return Err(());
+                }
+                self.propagate()?;
+                forced = true;
+                continue;
+            }
+            if !skip_cut {
+                for &(f, v) in &cut_cons {
+                    implied[f] |= bit(v);
+                }
+            }
+
+            let skip_uncut = implied[e] & UNCUT != 0;
+            let uncut_ok = skip_uncut || self.probe_collect(e, EdgeState::Uncut, &mut uncut_cons);
+            if !uncut_ok {
+                // Uncut contradicts -> force Cut
+                if !self.set_edge(e, EdgeState::Cut) {
+                    return Err(());
+                }
+                self.propagate()?;
+                forced = true;
+                continue;
+            }
+            if skip_uncut || skip_cut {
+                if !skip_uncut {
+                    for &(f, v) in &uncut_cons {
+                        implied[f] |= bit(v);
+                    }
                 }
                 continue;
             }
-
-            if self.edges[e] != EdgeState::Unknown {
-                continue; // forced by a previous probe's cascade
+            // Both probes succeeded: anything implied by both is forced.
+            for &(f, v) in &cut_cons {
+                cut_mark[f] = bit(v);
             }
-
-            // Probe Uncut
-            let uncut_ok = {
-                let _span = tracing::trace_span!(
-                    "probe",
-                    edge = e,
-                    val = "Uncut",
-                    depth = self.search_depth,
-                    unk = self.curr_unknown
-                )
-                .entered();
-                self.probe(|s| s.set_edge(e, EdgeState::Uncut))
-            };
-            tracing::trace!(
-                edge = e,
-                uncut_ok,
-                unk = self.curr_unknown,
-                "probe Uncut result"
-            );
-
-            if !uncut_ok {
-                // Uncut contradicts -> force Cut
-                if self.edges[e] == EdgeState::Unknown && self.set_edge(e, EdgeState::Cut) {
-                    return Ok(true);
+            let mut any = false;
+            for &(f, v) in &uncut_cons {
+                implied[f] |= bit(v);
+                if f != e && cut_mark[f] == bit(v) && self.edges[f] == EdgeState::Unknown {
+                    if !self.set_edge(f, v) {
+                        return Err(());
+                    }
+                    any = true;
                 }
+            }
+            for &(f, _) in &cut_cons {
+                cut_mark[f] = 0;
+            }
+            if any {
+                self.propagate()?;
+                forced = true;
             }
         }
 
-        Ok(false)
+        Ok(forced)
+    }
+
+    /// Like `probe`, but records the edges decided by the probe (including `e`
+    /// itself) into `out` when it succeeds.
+    fn probe_collect(
+        &mut self,
+        e: EdgeId,
+        val: EdgeState,
+        out: &mut Vec<(EdgeId, EdgeState)>,
+    ) -> bool {
+        out.clear();
+        let snap = self.snapshot();
+        let ok = self.set_edge(e, val) && self.propagate().is_ok();
+        if ok {
+            for &(f, _) in &self.changed[snap.edges..] {
+                out.push((f, self.edges[f]));
+            }
+        }
+        self.restore(snap);
+        tracing::trace!(edge = e, val = ?val, ok, unk = self.curr_unknown, "probe result");
+        ok
     }
 
     /// Probe pairs of edges sharing a vertex. For each pair (e1, e2),
