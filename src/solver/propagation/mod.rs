@@ -182,23 +182,13 @@ impl Solver {
                 // to see if one value causes contradiction. in_probing guard
                 // prevents recursion when called from within a probe.
                 if !self.in_probing && self.curr_unknown > 0 && self.curr_unknown <= 256 {
-                    let saved = self.in_probing;
                     self.in_probing = true;
                     self.debug_current_prop = "probe";
-                    progress |= self.probe_one_round()?;
-                    // Pair probing: probe pairs of edges sharing a vertex.
-                    // Higher threshold for loopy+watchtower where vertex-local
-                    // constraints make two-edge contradictions common.
-                    let pair_threshold: usize =
-                        if self.puzzle.rules.loopy && !self.puzzle.vertex_clues.is_empty() {
-                            20
-                        } else {
-                            10
-                        };
-                    if !progress && self.curr_unknown <= pair_threshold {
-                        progress |= self.probe_pair_round()?;
-                    }
-                    self.in_probing = saved;
+                    let r = self.probe_rounds();
+                    // Must be restored on the error path too; a leaked flag
+                    // silently disables probing for the rest of the search.
+                    self.in_probing = false;
+                    progress |= r?;
                 }
 
                 if !progress {
@@ -206,6 +196,27 @@ impl Solver {
                 }
             }
         }
+    }
+
+    /// Single-edge probing, followed by pair probing if that made no progress.
+    /// Must be called with `in_probing` set.
+    fn probe_rounds(&mut self) -> Result<bool, ()> {
+        if self.probe_one_round()? {
+            return Ok(true);
+        }
+        // Pair probing: probe pairs of edges sharing a vertex.
+        // Higher threshold for loopy+watchtower where vertex-local
+        // constraints make two-edge contradictions common.
+        let pair_threshold: usize =
+            if self.puzzle.rules.loopy && !self.puzzle.vertex_clues.is_empty() {
+                20
+            } else {
+                10
+            };
+        if self.curr_unknown <= pair_threshold {
+            return self.probe_pair_round();
+        }
+        Ok(false)
     }
 
     /// Single round of failed literal detection: for each unknown edge,

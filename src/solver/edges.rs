@@ -401,6 +401,9 @@ impl Solver {
             return;
         }
 
+        // Search nodes must never run in probing mode: probing disables
+        // probing itself and several expensive (but pruning) checks.
+        debug_assert!(!self.in_probing, "in_probing leaked into search");
         self.node_count += 1;
         self.report_progress();
         self.search_depth += 1;
