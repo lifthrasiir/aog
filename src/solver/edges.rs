@@ -245,27 +245,10 @@ impl Solver {
                 }
             }
 
-            // Rose cell proximity bonus: prefer edges near rose cells.
-            // The boundary between pieces must separate rose cells of the same type,
-            // so edges near them are more likely to be on the boundary.
-            if self.rose_bits_all != 0
-                && (self.cell_rose_sym[c1] != u8::MAX || self.cell_rose_sym[c2] != u8::MAX)
-            {
-                score += 80;
-            }
-            // Also bonus edges whose cells are in different rose-containing components
-            if self.rose_bits_all != 0 && !self.curr_comp_id.is_empty() {
-                let ci1_sym = self.cell_rose_sym[c1] != u8::MAX;
-                let ci2_sym = self.cell_rose_sym[c2] != u8::MAX;
-                // Edge between a rose cell and a non-rose cell is a strong boundary candidate
-                if ci1_sym ^ ci2_sym {
-                    score += 40;
-                }
-                // Edge between two cells with same-type rose symbols → must be DIFF (Cut)
-                if ci1_sym && ci2_sym && self.cell_rose_sym[c1] == self.cell_rose_sym[c2] {
-                    score += 200; // very high: this edge MUST be Cut
-                }
-            }
+            // No rose-cell proximity bonus: it scatters Cut-first decisions over
+            // every rose/blank boundary and made 10x10m2-rose-watch.txt stall.
+            // (Edges between same-type rose cells are already forced Cut by
+            // build_components, so they never reach here as Unknown.)
 
             // Compass-aware edge selection bonuses
             if self.has_compass_clue {
